@@ -1,0 +1,30 @@
+# Local dev dependencies: `docker compose up -d`.
+# Host ports are overridable in case a native Postgres/Redis already holds 5432/6379.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: qrbot
+      POSTGRES_PASSWORD: qrbot
+      POSTGRES_DB: qrbot
+    ports:
+      - '${POSTGRES_HOST_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U qrbot -d qrbot']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Not used yet — the Sheets sync queue (BullMQ) lands in Part 2.
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '${REDIS_HOST_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+
+volumes:
+  postgres-data:
+  redis-data:

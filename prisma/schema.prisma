@@ -1,0 +1,103 @@
+// Single schema file for the whole app (see .claude/rules/database.md).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Track {
+  JOB
+  EDU
+}
+
+/// Bot UI language, picked as the first registration step. Mirrors LANGUAGES in src/i18n.
+enum LanguageCode {
+  uz
+  ru
+  en
+}
+
+model Participant {
+  id                String   @id @default(uuid())
+  /// Telegram user id of the registrant — one registration per Telegram account.
+  telegramId        BigInt   @unique
+  languageCode      LanguageCode
+  phone             String
+  fullName          String
+  birthYearOrCourse String
+  /// One of DIRECTIONS in src/participants/registration.rules.ts.
+  direction         String
+  /// Null = not counted against MAX_PARTICIPANTS.
+  track             Track?
+  cvLink            String?
+  /// Non-guessable token encoded into the QR image — never the raw `id`.
+  qrToken           String   @unique
+  createdAt         DateTime @default(now())
+
+  payment    Payment?
+  scanEvents ScanEvent[]
+}
+
+/// State machine (see AGENTS.md): pending → paid → refund_requested → refunded, pending → expired.
+/// Transitions are enforced in src/payments/payment-state.ts.
+enum PaymentStatus {
+  pending
+  paid
+  refund_requested
+  refunded
+  expired
+}
+
+/// The 50 000 so'm Click payment. One per participant; `id` is the merchant_trans_id sent to Click.
+model Payment {
+  id                String        @id @default(uuid())
+  participantId     String        @unique
+  participant       Participant   @relation(fields: [participantId], references: [id])
+  status            PaymentStatus @default(pending)
+  /// In so'm. Stored, not assumed: Click callbacks are checked against this and PAYMENT_AMOUNT_UZS.
+  amount            Int
+  /// Click's click_trans_id, recorded on Prepare.
+  clickTransId      BigInt?       @unique
+  /// Our merchant_prepare_id / merchant_confirm_id — Click requires an integer, hence a sequence.
+  clickPrepareId    Int           @unique @default(autoincrement())
+  /// Set when Click's Prepare succeeded; Complete is only accepted after it.
+  preparedAt        DateTime?
+  createdAt         DateTime      @default(now())
+  paidAt            DateTime?
+  refundRequestedAt DateTime?
+  /// Telegram id of the admin who requested the refund.
+  refundRequestedBy BigInt?
+  refundedAt        DateTime?
+  /// Telegram id of the admin who approved the refund (after refunding in the Click cabinet).
+  refundApprovedBy  BigInt?
+}
+
+// Stub — name etc. arrive with the HR scanner part.
+model Company {
+  id         String      @id @default(uuid())
+  hrUsers    HrUser[]
+  scanEvents ScanEvent[]
+}
+
+// Stub — an HR user is bound to exactly one company.
+model HrUser {
+  id         String      @id @default(uuid())
+  companyId  String
+  company    Company     @relation(fields: [companyId], references: [id])
+  scanEvents ScanEvent[]
+}
+
+// Stub — append-only scan history; decision/timestamp arrive with the HR scanner part.
+model ScanEvent {
+  id            String      @id @default(uuid())
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id])
+  companyId     String
+  company       Company     @relation(fields: [companyId], references: [id])
+  hrUserId      String
+  hrUser        HrUser      @relation(fields: [hrUserId], references: [id])
+}

@@ -1,0 +1,9 @@
+# QR & HR scanning rules
+
+- HR scanning is **photo-based**: HR sends a photo of the QR code to the bot, the server decodes it. Don't build a live in-app camera or a Telegram WebApp scanner without asking first — that's a different, heavier feature than what was scoped.
+- The QR payload encodes `Participant.qrToken` (a signed/non-guessable value), never the raw database id. A photo of one participant's code must not let anyone derive or enumerate another participant's token.
+- Decode errors are distinct, specific messages to the HR user — "not a valid code," "code isn't from this event," "already checked in" are three different branches, not one generic "invalid QR code" catch-all. HR needs to know which one happened to decide what to do next.
+- Check-in (column H) is recorded once, on first successful decode — a second scan of the same participant does not overwrite the original check-in timestamp.
+- A `ScanEvent` always carries the HR user's own bound `companyId` — never infer or accept a company name from anything the HR user could type or pick incorrectly for someone else. If HR can represent more than one company, that must be an explicit, auditable choice, not a default.
+- Re-scanning a participant who already has a decision shows the current decision and lets HR change it; it creates a new `ScanEvent` row rather than mutating the old one (see `database.md` — append-only history), and the "current" status shown anywhere is always the latest event, never an average or a merge of several.
+- Color coding (green QR = Job Track, blue QR = Edu Track) is a visual aid only — the actual track decision always comes from `Participant.track` in the database, never re-derived from the QR's color by the decoding step.

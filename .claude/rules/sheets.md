@@ -1,0 +1,10 @@
+# Google Sheets sync rules
+
+- Google Sheets is a **mirror**, rebuildable from Postgres at any time. Never make a feature depend on reading a value back out of Sheets — Postgres already has it.
+- Every write to Sheets goes through the BullMQ queue and its processor. No bot handler, webhook controller, or HR-decision endpoint calls the Sheets API directly, synchronously — event-day concurrency (many HR scans in one minute) will hit Sheets rate limits and block the bot if it does.
+- The column contract is fixed, in this order, and must never be reordered, renamed, or repurposed without updating `AGENTS.md` in the same change:
+  A = ID/QR number · B = Full name · C = Phone · D = Direction · E = Track · F = CV/portfolio link · G = Payment status · H = Check-in · I = HR shortlist status · J = 14/30-day placement result.
+- Writes upsert by a stable key (the participant's QR token or id), not by row index/order — row order in the live sheet can't be trusted to match insertion order forever (manual sorting, filtering, etc. by whoever has edit access).
+- **Column J is never touched by the automated sync.** It's filled in manually by the client weeks after the event; a sync run must skip it entirely, not overwrite it with a blank or a default.
+- Payment status (G) only reflects `Payment.status` values that exist in the state machine (`Paid`/`Unpaid`/`Refunded`, or however they're mapped) — don't invent an intermediate display status in Sheets that doesn't correspond to a real `Payment.status`.
+- If a sync write fails (rate limit, transient API error), it's retried through the queue's own retry/backoff — don't silently drop it, and don't let a failed Sheets write roll back or block the Postgres transaction that already succeeded. Postgres is authoritative regardless of Sheets' state.

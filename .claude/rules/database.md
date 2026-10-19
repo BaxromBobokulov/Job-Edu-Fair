@@ -1,0 +1,11 @@
+# Database rules
+
+- Postgres (via Prisma) is the only source of truth. Google Sheets is a rebuildable mirror — never design a feature that reads from Sheets as if it were authoritative.
+- `prisma/schema.prisma` is the single schema file. Any new application table goes there, next to the existing ones — don't start a second schema file or a raw-SQL table outside Prisma's view.
+- Every application id is `@id @default(uuid())`. The participant's QR token is its own signed field (`qrToken`), never the raw `id` — the id must not be guessable or enumerable from a QR photo.
+- Enforce the 1200-participant cap at the database level (a constraint/trigger, or a `SELECT ... FOR UPDATE` inside the same transaction as the insert) — never a plain "count, then insert" from application code. Event-day concurrency will race a two-step check.
+- Generate a migration (`prisma migrate dev`) for every schema change and commit the emitted SQL under `prisma/migrations/`. `db push`-equivalent, schema-only changes without a migration file are a dev-only shortcut, never committed.
+- Read the emitted migration SQL before applying it, especially for anything touching `Participant`, `Payment`, or the retention job's delete logic.
+- PII columns (name, phone, CV link) and payment records are deleted by the scheduled retention job at `EVENT_DATE + 3 months` — not immediately on request, and not left to accumulate indefinitely either. Don't add a manual "delete now" admin button without the same date logic behind it.
+- `Payment.status` is an enum with fixed transitions (`pending → paid → refund_requested → refunded`, `pending → expired`). Don't add a new status value or allow a skip-transition (e.g. `pending → refunded`) without updating `AGENTS.md` and the state-machine tests together.
+- `ScanEvent` rows are append-only history, not an upsert-in-place "current status" row — a re-scan creates a new `ScanEvent`, it doesn't overwrite the previous one. The HR screen's "current decision" is derived by reading the latest `ScanEvent` per participant, not stored separately.
