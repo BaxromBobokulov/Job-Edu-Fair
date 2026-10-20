@@ -1,8 +1,10 @@
-import { Command, Ctx, Update } from 'nestjs-telegraf';
+import { Action, Command, Ctx, Update } from 'nestjs-telegraf';
 import { Markup } from 'telegraf';
 import { Lang, t } from '../i18n/i18n';
+import { RegistrationClosedError } from '../participants/participants.errors';
 import { Invoice, PaymentsService } from '../payments/payments.service';
-import { LANGUAGE_SCENE_ID } from './bot.constants';
+import { QrService } from '../qr/qr.service';
+import { LANGUAGE_SCENE_ID, PAY_RETRY_CALLBACK } from './bot.constants';
 import type { BotContext } from './bot.context';
 import { logUnexpected, replyT } from './scenes/registration.helpers';
 
@@ -22,6 +24,19 @@ function payKeyboard(invoice: Invoice, lang: Lang) {
     : undefined;
 }
 
+/** Sent by the expiry job (outside any conversation, hence no ctx). */
+export function expiryNotice(lang: Lang) {
+  return {
+    text: t('payment.expired', lang),
+    extra: Markup.inlineKeyboard([
+      Markup.button.callback(
+        t('payment.retryButton', lang),
+        PAY_RETRY_CALLBACK,
+      ),
+    ]),
+  };
+}
+
 /** The message right after registration: fee + Click pay button. */
 export async function sendPaymentOffer(
   ctx: BotContext,
@@ -33,6 +48,10 @@ export async function sendPaymentOffer(
   try {
     invoice = await payments.createInvoice(participantId);
   } catch (err) {
+    if (err instanceof RegistrationClosedError) {
+      await ctx.reply(t('registration.closed', lang));
+      return;
+    }
     logUnexpected('createInvoice', err);
     await ctx.reply(t('payment.unavailable', lang));
     return;
@@ -58,13 +77,31 @@ async function sendInvoice(
   }
 }
 
-/** `/status`: the participant's current payment state, with the pay button while unpaid. */
+/**
+ * `/status` and the "new payment link" button: the participant's current
+ * payment state, with the pay button while unpaid. After an expiry this is
+ * where a fresh invoice is created — if a place is still free. Once paid it
+ * resends the QR image: the "I lost my QR" (or "it never arrived") path.
+ */
 @Update()
 export class PaymentUpdate {
-  constructor(private readonly payments: PaymentsService) {}
+  constructor(
+    private readonly payments: PaymentsService,
+    private readonly qr: QrService,
+  ) {}
 
   @Command('status')
   async onStatus(@Ctx() ctx: BotContext): Promise<void> {
+    await this.showStatus(ctx);
+  }
+
+  @Action(PAY_RETRY_CALLBACK)
+  async onRetry(@Ctx() ctx: BotContext): Promise<void> {
+    await ctx.answerCbQuery();
+    await this.showStatus(ctx);
+  }
+
+  private async showStatus(ctx: BotContext): Promise<void> {
     if (!ctx.from) return;
 
     let status: Awaited<ReturnType<PaymentsService['getStatusByTelegramId']>>;
@@ -88,6 +125,19 @@ export class PaymentUpdate {
 
     // The stored registration language survives a bot restart; the session doesn't.
     ctx.session.language ??= status.languageCode;
+    if (!status.invoice) {
+      await ctx.reply(t('registration.closed', status.languageCode));
+      return;
+    }
+    if (status.invoice.status === 'paid') {
+      try {
+        await this.qr.sendQr(status.participantId, 'resend');
+      } catch (err) {
+        logUnexpected(`QR resend for participant ${status.participantId}`, err);
+        await ctx.reply(t('qr.unavailable', status.languageCode));
+      }
+      return;
+    }
     await sendInvoice(
       ctx,
       status.invoice,

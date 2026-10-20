@@ -40,4 +40,14 @@ describe('payment state machine', () => {
       expect(canTransition(from, to)).toBe(false);
     }
   });
+
+  // refund_requested frees the cap place (participant-cap.ts); that is only
+  // safe while nothing can move a refund back to a place-holding status.
+  it('has no "un-refund": refund_requested and refunded never return to paid or pending', () => {
+    for (const from of ['refund_requested', 'refunded'] as const) {
+      for (const to of ['paid', 'pending'] as const) {
+        expect(canTransition(from, to)).toBe(false);
+      }
+    }
+  });
 });

@@ -2,7 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LanguageCode, Participant, Prisma, Track } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
+import { PAYMENT_AMOUNT_UZS } from '../payments/payments.constants';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  countActiveHolds,
+  lockCap,
+  readMaxParticipants,
+} from './participant-cap';
 import {
   AlreadyRegisteredError,
   InvalidRegistrationError,
@@ -32,12 +38,6 @@ export interface RegistrationInput {
 
 export type RegistrationStatus = 'open' | 'closed' | 'registered';
 
-/**
- * Arbitrary constant key for the transaction-scoped advisory lock that
- * serializes "count, then insert" across concurrent registrations.
- */
-const PARTICIPANT_CAP_LOCK_KEY = 0x51520001n;
-
 function isLanguageCode(value: string): value is LanguageCode {
   return (Object.values(LanguageCode) as string[]).includes(value);
 }
@@ -50,12 +50,7 @@ export class ParticipantsService {
   ) {}
 
   private get maxParticipants(): number {
-    const raw = this.config.get<string | number>('MAX_PARTICIPANTS', 1200);
-    const cap = Number(raw);
-    if (!Number.isInteger(cap) || cap < 0) {
-      throw new Error('MAX_PARTICIPANTS must be a non-negative integer');
-    }
-    return cap;
+    return readMaxParticipants(this.config);
   }
 
   /**
@@ -68,13 +63,14 @@ export class ParticipantsService {
       select: { id: true },
     });
     if (existing) return 'registered';
-    const count = await this.countCapped(this.prisma);
+    const count = await countActiveHolds(this.prisma, new Date());
     return count >= this.maxParticipants ? 'closed' : 'open';
   }
 
   /**
-   * Creates the Participant, assigning its track. The cap check and the insert
-   * run in one transaction holding a Postgres advisory lock, so concurrent
+   * Creates the Participant, assigning its track, together with its pending
+   * Payment — the 2-hour hold on a place. The hold count and both inserts run
+   * in one transaction holding the cap advisory lock, so concurrent
    * registrations at count = cap - 1 yield exactly one success.
    *
    * @throws RegistrationClosedError | AlreadyRegisteredError | InvalidRegistrationError
@@ -85,11 +81,16 @@ export class ParticipantsService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PARTICIPANT_CAP_LOCK_KEY})`;
-        if ((await this.countCapped(tx)) >= cap) {
+        await lockCap(tx);
+        if ((await countActiveHolds(tx, new Date())) >= cap) {
           throw new RegistrationClosedError();
         }
-        return tx.participant.create({ data });
+        return tx.participant.create({
+          data: {
+            ...data,
+            payments: { create: { amount: PAYMENT_AMOUNT_UZS } },
+          },
+        });
       });
     } catch (err) {
       if (
@@ -101,10 +102,6 @@ export class ParticipantsService {
       }
       throw err;
     }
-  }
-
-  private countCapped(client: Prisma.TransactionClient): Promise<number> {
-    return client.participant.count({ where: { track: { not: null } } });
   }
 
   private validate(input: RegistrationInput): Prisma.ParticipantCreateInput {

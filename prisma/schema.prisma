@@ -31,14 +31,16 @@ model Participant {
   birthYearOrCourse String
   /// One of DIRECTIONS in src/participants/registration.rules.ts.
   direction         String
-  /// Null = not counted against MAX_PARTICIPANTS.
+  /// Null = not counted against MAX_PARTICIPANTS (which counts active payment
+  /// holds — see src/participants/participant-cap.ts).
   track             Track?
   cvLink            String?
   /// Non-guessable token encoded into the QR image — never the raw `id`.
   qrToken           String   @unique
   createdAt         DateTime @default(now())
 
-  payment    Payment?
+  /// Newest first is the current one; older rows are expired attempts.
+  payments   Payment[]
   scanEvents ScanEvent[]
 }
 
@@ -52,10 +54,12 @@ enum PaymentStatus {
   expired
 }
 
-/// The 50 000 so'm Click payment. One per participant; `id` is the merchant_trans_id sent to Click.
+/// The 50 000 so'm Click payment; `id` is the merchant_trans_id sent to Click.
+/// A participant has at most one non-expired Payment (enforced under the cap
+/// lock); a retry after expiry adds a new row and keeps the expired one.
 model Payment {
   id                String        @id @default(uuid())
-  participantId     String        @unique
+  participantId     String
   participant       Participant   @relation(fields: [participantId], references: [id])
   status            PaymentStatus @default(pending)
   /// In so'm. Stored, not assumed: Click callbacks are checked against this and PAYMENT_AMOUNT_UZS.
@@ -74,6 +78,11 @@ model Payment {
   refundedAt        DateTime?
   /// Telegram id of the admin who approved the refund (after refunding in the Click cabinet).
   refundApprovedBy  BigInt?
+  /// Set by the expiry job when an unpaid invoice outlived PAYMENT_HOLD_MS.
+  expiredAt         DateTime?
+
+  @@index([participantId, createdAt])
+  @@index([status, createdAt])
 }
 
 // Stub — name etc. arrive with the HR scanner part.

@@ -9,7 +9,10 @@ import { createTelegrafOptions } from '../src/config/telegraf.config';
 /** A message the bot sent, with the reply-keyboard button labels if any. */
 export interface SentMessage {
   chatId: number;
+  /** The caption, for a photo. */
   text: string;
+  /** The uploaded image bytes, for sendPhoto. */
+  photo?: Buffer;
   buttons?: string[];
   /** URLs of inline URL buttons (e.g. the Click pay link), if any. */
   urls?: string[];
@@ -123,6 +126,14 @@ export async function createTestBot(
   jest
     .spyOn(Telegram.prototype, 'callApi')
     .mockImplementation((method, payload) => {
+      if (method === 'sendPhoto') {
+        const { chat_id, photo, caption } = payload as {
+          chat_id: number;
+          photo: { source: Buffer };
+          caption: string;
+        };
+        sent.push({ chatId: chat_id, text: caption, photo: photo.source });
+      }
       if (method === 'sendMessage') {
         const { chat_id, text, reply_markup } = payload as {
           chat_id: number;

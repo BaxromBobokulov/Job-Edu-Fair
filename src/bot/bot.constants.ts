@@ -8,6 +8,9 @@ export const TRACK_SPLIT_SCENE_ID = 'track-split';
 export const LANGUAGE_CALLBACK_PREFIX = 'lang:';
 export const LANGUAGE_CALLBACK_RE = /^lang:(uz|ru|en)$/;
 
+/** Inline button on the expiry notice: get a fresh invoice if a place is free. */
+export const PAY_RETRY_CALLBACK = 'pay:retry';
+
 /**
  * Commands that work before a language is picked in this session: `/status`
  * answers in the language stored at registration, admin commands in English.

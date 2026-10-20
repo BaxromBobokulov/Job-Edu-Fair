@@ -70,6 +70,10 @@ const en = {
     '💳 Participation fee: {amount} so‘m.\n' +
     'Tap the button below to pay with Click. Send /status any time to check your payment.',
   'payment.button': '💳 Pay {amount} so‘m with Click',
+  'payment.expired':
+    '⌛ Your payment link expired: it stays valid for 2 hours. ' +
+    'Tap the button below for a new one — if a place is still free.',
+  'payment.retryButton': '🔄 New payment link',
   'payment.unavailable':
     'Online payment is temporarily unavailable. Please send /status again a bit later.',
   'status.notRegistered':
@@ -82,6 +86,18 @@ const en = {
   'status.refunded': '↩️ Payment status: refunded.',
   'status.expired':
     '⌛ Payment status: your invoice has expired. Please contact the organizers.',
+
+  'qr.issued.JOB':
+    '✅ Payment received — you are registered for Job & Edu Fair 2026!\n' +
+    '🟢 Here is your Job Track (VIP) QR code. Show it at the entrance and to company HRs. ' +
+    'Lost it? Send /status to get it again.',
+  'qr.issued.EDU':
+    '✅ Payment received — you are registered for Job & Edu Fair 2026!\n' +
+    '🔵 Here is your Edu Track QR code. Show it at the entrance. ' +
+    'Lost it? Send /status to get it again.',
+  'qr.resend': '✅ Payment status: paid.\nHere is your {track} QR code again.',
+  'qr.unavailable':
+    '✅ Payment status: paid. We couldn’t send your QR code right now — please send /status again in a minute.',
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -151,6 +167,10 @@ const ru: Record<MessageKey, string> = {
     '💳 Стоимость участия: {amount} сум.\n' +
     'Нажмите кнопку ниже, чтобы оплатить через Click. Статус оплаты можно проверить в любой момент командой /status.',
   'payment.button': '💳 Оплатить {amount} сум через Click',
+  'payment.expired':
+    '⌛ Срок вашей ссылки на оплату истёк: она действует 2 часа. ' +
+    'Нажмите кнопку ниже, чтобы получить новую, — если места ещё есть.',
+  'payment.retryButton': '🔄 Новая ссылка на оплату',
   'payment.unavailable':
     'Онлайн-оплата временно недоступна. Пожалуйста, отправьте /status чуть позже.',
   'status.notRegistered':
@@ -163,6 +183,18 @@ const ru: Record<MessageKey, string> = {
   'status.refunded': '↩️ Статус оплаты: средства возвращены.',
   'status.expired':
     '⌛ Статус оплаты: срок счёта истёк. Пожалуйста, свяжитесь с организаторами.',
+
+  'qr.issued.JOB':
+    '✅ Оплата получена — вы зарегистрированы на Job & Edu Fair 2026!\n' +
+    '🟢 Вот ваш QR-код Job Track (VIP). Покажите его на входе и HR-специалистам компаний. ' +
+    'Потеряли? Отправьте /status, чтобы получить его снова.',
+  'qr.issued.EDU':
+    '✅ Оплата получена — вы зарегистрированы на Job & Edu Fair 2026!\n' +
+    '🔵 Вот ваш QR-код Edu Track. Покажите его на входе. ' +
+    'Потеряли? Отправьте /status, чтобы получить его снова.',
+  'qr.resend': '✅ Статус оплаты: оплачено.\nВот ваш QR-код {track} ещё раз.',
+  'qr.unavailable':
+    '✅ Статус оплаты: оплачено. Не удалось отправить QR-код прямо сейчас — пожалуйста, отправьте /status через минуту.',
 };
 
 const uz: Record<MessageKey, string> = {
@@ -232,6 +264,10 @@ const uz: Record<MessageKey, string> = {
     "💳 Ishtirok to'lovi: {amount} so'm.\n" +
     "Click orqali to'lash uchun quyidagi tugmani bosing. To'lov holatini istalgan vaqtda /status orqali tekshirishingiz mumkin.",
   'payment.button': "💳 Click orqali {amount} so'm to'lash",
+  'payment.expired':
+    "⌛ To'lov havolangiz muddati tugadi: u 2 soat amal qiladi. " +
+    "Yangisini olish uchun quyidagi tugmani bosing — agar bo'sh joy qolgan bo'lsa.",
+  'payment.retryButton': "🔄 Yangi to'lov havolasi",
   'payment.unavailable':
     "Onlayn to'lov vaqtincha ishlamayapti. Iltimos, birozdan so'ng /status ni qayta yuboring.",
   'status.notRegistered':
@@ -244,6 +280,19 @@ const uz: Record<MessageKey, string> = {
   'status.refunded': "↩️ To'lov holati: pul qaytarildi.",
   'status.expired':
     "⌛ To'lov holati: hisob muddati tugagan. Iltimos, tashkilotchilarga murojaat qiling.",
+
+  'qr.issued.JOB':
+    "✅ To'lov qabul qilindi — siz Job & Edu Fair 2026 ga ro'yxatdan o'tdingiz!\n" +
+    "🟢 Mana Job Track (VIP) QR-kodingiz. Uni kirishda va kompaniyalar HR xodimlariga ko'rsating. " +
+    "Yo'qotib qo'ysangiz, qayta olish uchun /status yuboring.",
+  'qr.issued.EDU':
+    "✅ To'lov qabul qilindi — siz Job & Edu Fair 2026 ga ro'yxatdan o'tdingiz!\n" +
+    "🔵 Mana Edu Track QR-kodingiz. Uni kirishda ko'rsating. " +
+    "Yo'qotib qo'ysangiz, qayta olish uchun /status yuboring.",
+  'qr.resend':
+    "✅ To'lov holati: to'langan.\nMana {track} QR-kodingiz yana bir bor.",
+  'qr.unavailable':
+    "✅ To'lov holati: to'langan. QR-kodni hozir yuborib bo'lmadi — iltimos, bir daqiqadan so'ng /status ni qayta yuboring.",
 };
 
 export const translations: Record<Lang, Record<MessageKey, string>> = {

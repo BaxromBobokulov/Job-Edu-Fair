@@ -1,12 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { LanguageCode, Payment, PaymentStatus, Prisma } from '@prisma/client';
+import {
+  countActiveHolds,
+  holdCutoff,
+  lockCap,
+  readMaxParticipants,
+} from '../participants/participant-cap';
+import { RegistrationClosedError } from '../participants/participants.errors';
 import { PrismaService } from '../prisma/prisma.service';
+import { QrService } from '../qr/qr.service';
 import { ClickConfig } from './click.config';
 import { ClickError, VerifiedClickRequest } from './click.protocol';
 import { assertTransition } from './payment-state';
 import { PAYMENT_AMOUNT_UZS } from './payments.constants';
 import {
   ClickNotConfiguredError,
+  InvalidPaymentTransitionError,
   PaymentNotAllowedError,
   PaymentNotFoundError,
 } from './payments.errors';
@@ -21,8 +31,10 @@ export interface Invoice {
 }
 
 export interface ParticipantPaymentStatus {
+  participantId: string;
   languageCode: LanguageCode;
-  invoice: Invoice;
+  /** null: the last invoice expired and no place is free for a new one. */
+  invoice: Invoice | null;
 }
 
 /** Outcome of a Prepare/Complete call, turned into Click's JSON by the controller. */
@@ -30,6 +42,15 @@ export interface ClickResult {
   error: ClickError;
   /** merchant_prepare_id (Prepare) / merchant_confirm_id (Complete). */
   merchantId?: number;
+}
+
+/** One payment the expiry job moved to `expired`, with what's needed to notify. */
+export interface ExpiredPayment {
+  paymentId: string;
+  participantId: string;
+  telegramId: bigint;
+  languageCode: LanguageCode;
+  expiredAt: Date;
 }
 
 export type PaymentWithParticipant = Prisma.PaymentGetPayload<{
@@ -42,6 +63,14 @@ const UUID_RE =
 function isUniqueViolation(err: unknown): boolean {
   return (
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
+  );
+}
+
+/** A pending invoice past the 2-hour hold: no longer counted, must not be paid. */
+function isOverdue(payment: Payment, now: Date): boolean {
+  return (
+    payment.status === PaymentStatus.pending &&
+    payment.createdAt <= holdCutoff(now)
   );
 }
 
@@ -63,42 +92,45 @@ export class PaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly click: ClickConfig,
+    private readonly config: ConfigService,
+    private readonly qr: QrService,
   ) {}
 
   /**
-   * Returns the participant's Payment, creating it as `pending` on first call.
-   * The participant's place was already reserved under the cap lock at
-   * registration, so an invoice can never be issued for a place beyond the cap.
+   * Returns the participant's current Payment. Registration creates the first
+   * one; a new `pending` one is created only when there is none or the last
+   * one expired (or is past its window) — and only if a place is free right
+   * now, checked under the cap lock, since the old place may have been taken.
    *
-   * @throws PaymentNotAllowedError
+   * @throws PaymentNotAllowedError | RegistrationClosedError
    */
   async createInvoice(participantId: string): Promise<Invoice> {
     const participant = await this.prisma.participant.findUnique({
       where: { id: participantId },
-      select: { track: true, payment: true },
+      select: {
+        track: true,
+        payments: { orderBy: { createdAt: 'desc' }, take: 1 },
+      },
     });
     if (!participant || participant.track === null) {
       throw new PaymentNotAllowedError();
     }
 
-    let payment = participant.payment;
-    if (!payment) {
-      try {
-        payment = await this.prisma.payment.create({
-          data: { participantId, amount: PAYMENT_AMOUNT_UZS },
-        });
-      } catch (err) {
-        // A concurrent call created it first (participantId is unique).
-        if (!isUniqueViolation(err)) throw err;
-        payment = await this.prisma.payment.findUniqueOrThrow({
-          where: { participantId },
-        });
-      }
+    const latest = participant.payments[0];
+    if (
+      latest &&
+      latest.status !== PaymentStatus.expired &&
+      !isOverdue(latest, new Date())
+    ) {
+      return this.toInvoice(latest);
     }
-    return this.toInvoice(payment);
+    return this.toInvoice(await this.reinvoice(participantId));
   }
 
-  /** For `/status`: null if this Telegram account never registered. */
+  /**
+   * For `/status` and the retry button: null if this Telegram account never
+   * registered. Creates a fresh invoice after expiry when a place is free.
+   */
   async getStatusByTelegramId(
     telegramId: number,
   ): Promise<ParticipantPaymentStatus | null> {
@@ -107,10 +139,20 @@ export class PaymentsService {
       select: { id: true, languageCode: true },
     });
     if (!participant) return null;
-    return {
-      languageCode: participant.languageCode,
-      invoice: await this.createInvoice(participant.id),
-    };
+    try {
+      return {
+        participantId: participant.id,
+        languageCode: participant.languageCode,
+        invoice: await this.createInvoice(participant.id),
+      };
+    } catch (err) {
+      if (!(err instanceof RegistrationClosedError)) throw err;
+      return {
+        participantId: participant.id,
+        languageCode: participant.languageCode,
+        invoice: null,
+      };
+    }
   }
 
   /** Click Prepare (action=0): records Click's transaction id on a pending payment. */
@@ -132,6 +174,10 @@ export class PaymentsService {
         }
         if (payment.status !== PaymentStatus.pending) {
           return { error: ClickError.AlreadyPaid };
+        }
+        if (isOverdue(payment, new Date())) {
+          // Its place may already be someone else's; the expiry job will expire it.
+          return { error: ClickError.TransactionCancelled };
         }
         // A new click_trans_id replaces an earlier attempt that never completed.
         if (payment.clickTransId !== req.clickTransId || !payment.preparedAt) {
@@ -161,7 +207,8 @@ export class PaymentsService {
       return { error: ClickError.OrderNotFound };
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    let paidParticipantId: string | undefined;
+    const result = await this.prisma.$transaction(async (tx) => {
       const payment = await this.lock(tx, req.merchantTransId);
       if (!payment) return { error: ClickError.OrderNotFound };
       if (
@@ -185,6 +232,10 @@ export class PaymentsService {
         return { error: ClickError.Success, ...confirm };
       }
 
+      if (isOverdue(payment, new Date())) {
+        // Past the 2-hour hold: its place may already be someone else's.
+        return { error: ClickError.TransactionCancelled };
+      }
       if (req.clickError < 0) {
         // Click cancelled this attempt (declined card, timeout…). The payment
         // stays pending so the participant can pay again with the same link.
@@ -197,9 +248,30 @@ export class PaymentsService {
         where: { id: payment.id },
         data: { status: PaymentStatus.paid, paidAt: new Date() },
       });
-      // Part 3: QR issuance hooks in here, as a side effect of this transition.
       this.logger.log(`Payment ${payment.id} paid`);
+      paidParticipantId = payment.participantId;
       return { error: ClickError.Success, ...confirm };
+    });
+
+    // QR issuance: the side effect of this call's `pending → paid`, run once
+    // the transition is committed (a QR failure can't roll back `paid`) and
+    // not awaited (Click's answer doesn't wait on Telegram). A replay never
+    // gets here, so the QR is sent once; /status resends it on demand.
+    if (paidParticipantId) this.issueQrAfterPaid(paidParticipantId);
+    return result;
+  }
+
+  /**
+   * Fire-and-forget QR delivery. A failure is logged at error level, with
+   * the recovery path, and never surfaces into the payment flow.
+   */
+  private issueQrAfterPaid(participantId: string): void {
+    this.qr.sendQr(participantId, 'issued').catch((err: unknown) => {
+      this.logger.error(
+        `QR delivery FAILED for paid participant ${participantId} — payment stays paid; ` +
+          `the participant gets the QR via /status`,
+        err instanceof Error ? err.stack : String(err),
+      );
     });
   }
 
@@ -240,12 +312,48 @@ export class PaymentsService {
     return payment;
   }
 
-  /**
-   * `pending → expired`. Not triggered by anything yet: Click's SHOP API has no
-   * "invoice expired" callback (see the Part 2 notes) — wire a trigger once one is agreed.
-   */
+  /** `pending → expired`, logged. Called by the expiry job for overdue invoices. */
   async expire(paymentId: string): Promise<Payment> {
-    return this.transition(paymentId, PaymentStatus.expired, {});
+    const payment = await this.transition(paymentId, PaymentStatus.expired, {
+      expiredAt: new Date(),
+    });
+    this.logExpiry(payment);
+    return payment;
+  }
+
+  /**
+   * Expires every invoice still `pending` after the 2-hour hold. A payment
+   * paid (or expired) between the lookup and its row lock is skipped.
+   */
+  async expireOverdue(now = new Date()): Promise<ExpiredPayment[]> {
+    const overdue = await this.prisma.payment.findMany({
+      where: {
+        status: PaymentStatus.pending,
+        createdAt: { lte: holdCutoff(now) },
+      },
+      select: {
+        id: true,
+        participant: { select: { telegramId: true, languageCode: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const expired: ExpiredPayment[] = [];
+    for (const row of overdue) {
+      try {
+        const payment = await this.expire(row.id);
+        expired.push({
+          paymentId: payment.id,
+          participantId: payment.participantId,
+          telegramId: row.participant.telegramId,
+          languageCode: row.participant.languageCode,
+          expiredAt: payment.expiredAt ?? now,
+        });
+      } catch (err) {
+        if (!(err instanceof InvalidPaymentTransitionError)) throw err;
+      }
+    }
+    return expired;
   }
 
   /** Admin lookup by the participant's phone (normalized `+digits`). */
@@ -262,6 +370,58 @@ export class PaymentsService {
       include: { participant: { select: { fullName: true, phone: true } } },
       orderBy: { refundRequestedAt: 'asc' },
     });
+  }
+
+  /**
+   * New pending payment after none/an expired one, under the cap lock. The
+   * previous payment is row-locked too, so a Click Complete that just
+   * committed is seen rather than raced. A stale pending invoice is expired
+   * here too (and stays expired even when no place is free).
+   *
+   * @throws RegistrationClosedError
+   */
+  private async reinvoice(participantId: string): Promise<Payment> {
+    const { payment, expired } = await this.prisma.$transaction(async (tx) => {
+      await lockCap(tx);
+      const now = new Date();
+      const latest = await tx.payment.findFirst({
+        where: { participantId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      const current = latest && (await this.lock(tx, latest.id));
+      let expired: Payment | undefined;
+      if (current && isOverdue(current, now)) {
+        assertTransition(current.status, PaymentStatus.expired);
+        expired = await tx.payment.update({
+          where: { id: current.id },
+          data: { status: PaymentStatus.expired, expiredAt: now },
+        });
+      } else if (current && current.status !== PaymentStatus.expired) {
+        // A concurrent retry (or a payment) got here first.
+        return { payment: current, expired };
+      }
+
+      const full =
+        (await countActiveHolds(tx, now)) >= readMaxParticipants(this.config);
+      // No throw inside the transaction: that would roll back the expiry above.
+      const payment = full
+        ? null
+        : await tx.payment.create({
+            data: { participantId, amount: PAYMENT_AMOUNT_UZS },
+          });
+      return { payment, expired };
+    });
+
+    if (expired) this.logExpiry(expired);
+    if (!payment) throw new RegistrationClosedError();
+    return payment;
+  }
+
+  private logExpiry(payment: Payment): void {
+    this.logger.log(
+      `Payment ${payment.id} (participant ${payment.participantId}) expired at ${payment.expiredAt?.toISOString()}`,
+    );
   }
 
   private toInvoice(payment: Payment): Invoice {

@@ -13,6 +13,7 @@ import type { App } from 'supertest/types';
 import { describeDb, setUpTestDatabase } from '../../test/test-db';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PrismaService } from '../prisma/prisma.service';
+import { QrService } from '../qr/qr.service';
 import {
   ClickError,
   ClickRawRequest,
@@ -40,6 +41,8 @@ describeDb('Click payments (Postgres + HTTP)', () => {
   let app: INestApplication<App>;
   let payments: PaymentsService;
   const logged: string[] = [];
+  // QR rendering + Telegram are covered by src/qr/qr.db.spec.ts; here only the hook.
+  const qr = { sendQr: jest.fn() };
 
   beforeAll(async () => {
     prisma = await setUpTestDatabase(TEST_SCHEMA);
@@ -59,7 +62,10 @@ describeDb('Click payments (Postgres + HTTP)', () => {
         PrismaModule,
         PaymentsModule,
       ],
-    }).compile();
+    })
+      .overrideProvider(QrService)
+      .useValue(qr)
+      .compile();
     app = moduleRef.createNestApplication({ logger: false });
     await app.init();
     payments = app.get(PaymentsService);
@@ -81,6 +87,7 @@ describeDb('Click payments (Postgres + HTTP)', () => {
 
   beforeEach(async () => {
     await prisma.$executeRawUnsafe('TRUNCATE "Participant" CASCADE');
+    qr.sendQr.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -204,11 +211,13 @@ describeDb('Click payments (Postgres + HTTP)', () => {
     const paid = await paymentRow(invoice.paymentId);
     expect(paid.status).toBe(PaymentStatus.paid);
     expect(paid.paidAt).toBeInstanceOf(Date);
+    expect(qr.sendQr.mock.calls).toEqual([[participant.id, 'issued']]);
 
     // /status view after payment: no pay link any more.
     expect(
       await payments.getStatusByTelegramId(Number(participant.telegramId)),
     ).toEqual({
+      participantId: participant.id,
       languageCode: 'en',
       invoice: {
         paymentId: invoice.paymentId,
@@ -240,6 +249,7 @@ describeDb('Click payments (Postgres + HTTP)', () => {
     expect(
       logged.filter((l) => l === `Payment ${paymentId} paid`),
     ).toHaveLength(1);
+    expect(qr.sendQr).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a bad signature without changing anything', async () => {
@@ -271,6 +281,7 @@ describeDb('Click payments (Postgres + HTTP)', () => {
     const row = await paymentRow(paymentId);
     expect(row.status).toBe(PaymentStatus.pending);
     expect(row.paidAt).toBeNull();
+    expect(qr.sendQr).not.toHaveBeenCalled();
   });
 
   it('rejects a correctly signed wrong amount on Prepare and on Complete', async () => {
@@ -351,6 +362,24 @@ describeDb('Click payments (Postgres + HTTP)', () => {
       clickTransId: nextClickTransId++,
     });
     expect(again.error).toBe(ClickError.AlreadyPaid);
+  });
+
+  it('refuses Click on an invoice past its 2-hour hold (its place may be gone)', async () => {
+    const prepared = await invoiceAndPrepare();
+    await prisma.payment.update({
+      where: { id: prepared.paymentId },
+      data: { createdAt: new Date(Date.now() - 121 * 60_000) },
+    });
+
+    expect((await click('complete', prepared)).error).toBe(
+      ClickError.TransactionCancelled,
+    );
+    const prepare = await click('prepare', {
+      paymentId: prepared.paymentId,
+      clickTransId: nextClickTransId++,
+    });
+    expect(prepare.error).toBe(ClickError.TransactionCancelled);
+    expect((await paymentRow(prepared.paymentId)).paidAt).toBeNull();
   });
 
   it('refund: paid → refund_requested → refunded, recording who and when', async () => {

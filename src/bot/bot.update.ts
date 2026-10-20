@@ -1,12 +1,4 @@
-import {
-  Action,
-  Command,
-  Ctx,
-  Next,
-  Start,
-  Update,
-  Use,
-} from 'nestjs-telegraf';
+import { Action, Ctx, Next, Start, Update, Use } from 'nestjs-telegraf';
 import {
   LANGUAGE_CALLBACK_RE,
   LANGUAGE_FREE_COMMANDS,
@@ -40,7 +32,6 @@ export class BotUpdate {
 
   @Start()
   async onStart(@Ctx() ctx: BotContext): Promise<void> {
-    ctx.session.startedAt = new Date().toISOString();
     await ctx.scene.enter(LANGUAGE_SCENE_ID);
   }
 
@@ -48,14 +39,5 @@ export class BotUpdate {
   @Action(LANGUAGE_CALLBACK_RE)
   async onStaleLanguagePick(@Ctx() ctx: BotContext): Promise<void> {
     await ctx.answerCbQuery();
-  }
-
-  // Dev-only diagnostic from the scaffold; not part of the participant flow.
-  @Command('session')
-  async onSession(@Ctx() ctx: BotContext): Promise<void> {
-    const { startedAt } = ctx.session;
-    await ctx.reply(
-      startedAt ? `session.startedAt = ${startedAt}` : 'session is empty',
-    );
   }
 }

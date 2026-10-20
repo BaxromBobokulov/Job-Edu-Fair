@@ -9,6 +9,7 @@ import { BotModule } from '../bot/bot.module';
 import { ParticipantsService } from '../participants/participants.service';
 import { InvalidPaymentTransitionError } from '../payments/payments.errors';
 import { PaymentsService } from '../payments/payments.service';
+import { QrService } from '../qr/qr.service';
 import { AdminModule } from './admin.module';
 
 const ADMIN = 4242;
@@ -45,6 +46,8 @@ describe('admin refund commands', () => {
           .overrideProvider(PaymentsService)
           .useValue(payments)
           .overrideProvider(ParticipantsService)
+          .useValue({})
+          .overrideProvider(QrService)
           .useValue({}),
     );
     bot = testBot.bot;

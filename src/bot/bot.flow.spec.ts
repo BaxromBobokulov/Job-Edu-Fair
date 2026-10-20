@@ -17,6 +17,7 @@ import {
 import { assignTrack, DIRECTIONS } from '../participants/registration.rules';
 import { ClickConfig } from '../payments/click.config';
 import { Invoice, PaymentsService } from '../payments/payments.service';
+import { QrService } from '../qr/qr.service';
 import { BotModule } from './bot.module';
 
 const PICKER_TEXT = LANGUAGES.map((l) => t('language.prompt', l)).join('\n');
@@ -50,6 +51,7 @@ describe('registration bot flow', () => {
     createInvoice: jest.fn(),
     getStatusByTelegramId: jest.fn(),
   };
+  const qr = { sendQr: jest.fn() };
 
   const send = (update: Update) => bot.handleUpdate(update);
   const textsTo = (chatId: number) =>
@@ -77,7 +79,9 @@ describe('registration bot flow', () => {
         .overrideProvider(PaymentsService)
         .useValue(payments)
         .overrideProvider(ClickConfig)
-        .useValue({}),
+        .useValue({})
+        .overrideProvider(QrService)
+        .useValue(qr),
     );
     bot = testBot.bot;
     sent = testBot.sent;
@@ -97,6 +101,7 @@ describe('registration bot flow', () => {
       );
     payments.createInvoice.mockReset().mockResolvedValue(PENDING_INVOICE);
     payments.getStatusByTelegramId.mockReset().mockResolvedValue(null);
+    qr.sendQr.mockReset().mockResolvedValue(undefined);
   });
 
   describe.each(LANGUAGES.map((lang, i) => [lang, 100 + i * 10] as const))(
@@ -221,6 +226,7 @@ describe('registration bot flow', () => {
       it('/status shows each payment state in the stored language, even with no session', async () => {
         const id = userId + 5; // never picked a language in this session
         payments.getStatusByTelegramId.mockResolvedValueOnce({
+          participantId: 'participant-1',
           languageCode: lang,
           invoice: PENDING_INVOICE,
         });
@@ -232,13 +238,24 @@ describe('registration bot flow', () => {
           urls: [PAY_URL],
         });
 
+        // Paid: the QR image is resent (rendered + sent by QrService).
+        payments.getStatusByTelegramId.mockResolvedValueOnce({
+          participantId: 'participant-1',
+          languageCode: lang,
+          invoice: { ...PENDING_INVOICE, status: 'paid', payUrl: null },
+        });
+        const before = sent.length;
+        await send(textUpdate(id, '/status'));
+        expect(qr.sendQr).toHaveBeenCalledWith('participant-1', 'resend');
+        expect(sent.length).toBe(before);
+
         for (const status of [
-          'paid',
           'refund_requested',
           'refunded',
           'expired',
         ] as const) {
           payments.getStatusByTelegramId.mockResolvedValueOnce({
+            participantId: 'participant-1',
             languageCode: lang,
             invoice: { ...PENDING_INVOICE, status, payUrl: null },
           });
@@ -297,7 +314,7 @@ describe('registration bot flow', () => {
 
   describe('language gate (no language picked yet)', () => {
     it.each([
-      ['a command', 201, (id: number) => textUpdate(id, '/session')],
+      ['a command', 201, (id: number) => textUpdate(id, '/help')],
       ['/cancel', 202, (id: number) => textUpdate(id, '/cancel')],
       ['plain text', 203, (id: number) => textUpdate(id, 'hi')],
       ['a contact', 204, (id: number) => contactUpdate(id, '998901234567')],
@@ -310,7 +327,7 @@ describe('registration bot flow', () => {
 
     it('re-prompts on any command while the picker is open', async () => {
       await send(textUpdate(205, '/start'));
-      await send(textUpdate(205, '/session'));
+      await send(textUpdate(205, '/help'));
       expect(textsTo(205)).toEqual([PICKER_TEXT, PICKER_TEXT]);
     });
   });
@@ -355,9 +372,41 @@ describe('registration bot flow', () => {
     expect(sent).toEqual([]);
   });
 
-  it('keeps session values across messages once a language is picked', async () => {
+  it('/session is gone: no reply mid-registration or outside any scene', async () => {
     await startAndPick(600, 'en');
-    await send(textUpdate(600, '/session'));
-    expect(last().text).toMatch(/^session\.startedAt = \d{4}-/);
+    sent.length = 0;
+    await send(textUpdate(600, '/session')); // inside onboarding
+    await send(textUpdate(600, '/cancel'));
+    await send(textUpdate(600, '/session')); // no scene
+    expect(textsTo(600)).toEqual([t('registration.cancelled', 'en')]);
+    expect(sent.some((m) => /startedAt|session is empty/.test(m.text))).toBe(
+      false,
+    );
+  });
+
+  it('the expiry notice’s retry button re-invoices, or says closed when no place is free', async () => {
+    payments.getStatusByTelegramId.mockResolvedValueOnce({
+      participantId: 'participant-800',
+      languageCode: 'uz',
+      invoice: { ...PENDING_INVOICE, paymentId: 'pay-2' },
+    });
+    await send(callbackUpdate(800, 'pay:retry'));
+    expect(last()).toEqual({
+      chatId: 800,
+      text: t('status.pending', 'uz', { amount: '50 000' }),
+      buttons: [t('payment.button', 'uz', { amount: '50 000' })],
+      urls: [PAY_URL],
+    });
+
+    payments.getStatusByTelegramId.mockResolvedValueOnce({
+      participantId: 'participant-801',
+      languageCode: 'ru',
+      invoice: null,
+    });
+    await send(callbackUpdate(801, 'pay:retry'));
+    expect(last()).toEqual({
+      chatId: 801,
+      text: t('registration.closed', 'ru'),
+    });
   });
 });

@@ -14,8 +14,6 @@ export interface RegistrationDraft {
 
 /** Data persisted per chat/user across messages (`ctx.session`). */
 export interface BotSession extends Scenes.WizardSession<BotWizardSessionData> {
-  /** ISO timestamp of the last `/start`; used to verify session persistence. */
-  startedAt?: string;
   /** Picked in the language scene; every bot message after that renders in it. */
   language?: Lang;
   registration?: RegistrationDraft;
