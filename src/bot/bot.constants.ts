@@ -12,6 +12,17 @@ export const LANGUAGE_CALLBACK_RE = /^lang:(uz|ru|en)$/;
 export const PAY_RETRY_CALLBACK = 'pay:retry';
 
 /**
+ * HR decision buttons: `hr:<ScanDecision>:<participantId>`. The company is
+ * never in the callback — it always comes from the pressing HR user's binding.
+ */
+export const HR_DECISION_CALLBACK_PREFIX = 'hr:';
+export const HR_DECISION_CALLBACK_RE =
+  /^hr:(interview|internship|reserve):([0-9a-f-]{36})$/;
+
+/** Event-day clock for times shown to HR (check-in, decisions). */
+export const EVENT_TIME_ZONE = 'Asia/Tashkent';
+
+/**
  * Commands that work before a language is picked in this session: `/status`
  * answers in the language stored at registration, admin commands in English.
  */

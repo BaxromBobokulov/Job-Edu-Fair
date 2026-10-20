@@ -10,6 +10,7 @@ import {
 import { RegistrationClosedError } from '../participants/participants.errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { QrService } from '../qr/qr.service';
+import { SheetsSyncService } from '../sheets/sheets-sync.service';
 import { ClickConfig } from './click.config';
 import { ClickError, VerifiedClickRequest } from './click.protocol';
 import { assertTransition } from './payment-state';
@@ -48,7 +49,8 @@ export interface ClickResult {
 export interface ExpiredPayment {
   paymentId: string;
   participantId: string;
-  telegramId: bigint;
+  /** Null once the retention job purged the participant's PII. */
+  telegramId: bigint | null;
   languageCode: LanguageCode;
   expiredAt: Date;
 }
@@ -94,6 +96,7 @@ export class PaymentsService {
     private readonly click: ClickConfig,
     private readonly config: ConfigService,
     private readonly qr: QrService,
+    private readonly sheets: SheetsSyncService,
   ) {}
 
   /**
@@ -257,7 +260,10 @@ export class PaymentsService {
     // the transition is committed (a QR failure can't roll back `paid`) and
     // not awaited (Click's answer doesn't wait on Telegram). A replay never
     // gets here, so the QR is sent once; /status resends it on demand.
-    if (paidParticipantId) this.issueQrAfterPaid(paidParticipantId);
+    if (paidParticipantId) {
+      this.sheets.paymentStatusChanged(paidParticipantId);
+      this.issueQrAfterPaid(paidParticipantId);
+    }
     return result;
   }
 
@@ -414,6 +420,8 @@ export class PaymentsService {
     });
 
     if (expired) this.logExpiry(expired);
+    // Column G shows the current payment: the new pending one, or the expiry.
+    if (expired || payment) this.sheets.paymentStatusChanged(participantId);
     if (!payment) throw new RegistrationClosedError();
     return payment;
   }
@@ -458,7 +466,7 @@ export class PaymentsService {
     data: Omit<Prisma.PaymentUpdateInput, 'status'>,
   ): Promise<Payment> {
     if (!UUID_RE.test(paymentId)) throw new PaymentNotFoundError();
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const payment = await this.lock(tx, paymentId);
       if (!payment) throw new PaymentNotFoundError();
       assertTransition(payment.status, to);
@@ -467,5 +475,7 @@ export class PaymentsService {
         data: { ...data, status: to },
       });
     });
+    this.sheets.paymentStatusChanged(updated.participantId);
+    return updated;
   }
 }

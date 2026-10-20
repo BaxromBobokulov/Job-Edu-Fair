@@ -4,6 +4,7 @@ import { LanguageCode, Participant, Prisma, Track } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import { PAYMENT_AMOUNT_UZS } from '../payments/payments.constants';
 import { PrismaService } from '../prisma/prisma.service';
+import { SheetsSyncService } from '../sheets/sheets-sync.service';
 import {
   countActiveHolds,
   lockCap,
@@ -47,6 +48,7 @@ export class ParticipantsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly sheets: SheetsSyncService,
   ) {}
 
   private get maxParticipants(): number {
@@ -71,7 +73,8 @@ export class ParticipantsService {
    * Creates the Participant, assigning its track, together with its pending
    * Payment — the 2-hour hold on a place. The hold count and both inserts run
    * in one transaction holding the cap advisory lock, so concurrent
-   * registrations at count = cap - 1 yield exactly one success.
+   * registrations at count = cap - 1 yield exactly one success. The Sheets
+   * row is enqueued once committed.
    *
    * @throws RegistrationClosedError | AlreadyRegisteredError | InvalidRegistrationError
    */
@@ -79,8 +82,9 @@ export class ParticipantsService {
     const data = this.validate(input);
     const cap = this.maxParticipants;
 
+    let participant: Participant;
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      participant = await this.prisma.$transaction(async (tx) => {
         await lockCap(tx);
         if ((await countActiveHolds(tx, new Date())) >= cap) {
           throw new RegistrationClosedError();
@@ -102,6 +106,8 @@ export class ParticipantsService {
       }
       throw err;
     }
+    this.sheets.registered(participant.id);
+    return participant;
   }
 
   private validate(input: RegistrationInput): Prisma.ParticipantCreateInput {

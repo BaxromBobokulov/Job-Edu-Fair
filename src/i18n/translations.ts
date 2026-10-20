@@ -98,6 +98,28 @@ const en = {
   'qr.resend': '✅ Payment status: paid.\nHere is your {track} QR code again.',
   'qr.unavailable':
     '✅ Payment status: paid. We couldn’t send your QR code right now — please send /status again in a minute.',
+
+  'hr.welcome':
+    '👋 You are registered as an HR scanner for {company} at Job & Edu Fair 2026.\n' +
+    'Send a photo of a participant’s QR code to see their profile and record your decision.',
+  'hr.profile':
+    '👤 {name}\nDirection: {direction}\nTrack: {track}\n\n{checkIn}\n{decision}',
+  'hr.checkIn.first': '✅ Checked in now ({time}).',
+  'hr.checkIn.already': 'ℹ️ Already checked in at {time}.',
+  'hr.decision.none': 'Your company’s decision: none yet.',
+  'hr.decision.current': 'Your company’s decision: {decision} ({time}).',
+  'hr.decision.interview': 'Invited to interview',
+  'hr.decision.internship': 'Recommended for internship',
+  'hr.decision.reserve': 'On hold',
+  'hr.decisionSaved': '✅ Saved for {name}: {decision}.',
+  'hr.invalidCode':
+    '❌ Not a valid code. Retake the photo closer and in focus, or ask the participant to open their QR again.',
+  'hr.otherEvent': '⚠️ This code is not from Job & Edu Fair 2026.',
+  'hr.noLongerValid':
+    '⛔ This registration is no longer valid (the payment was refunded or not completed). Send the participant to the registration desk.',
+  'hr.notScanned': 'Scan the participant’s QR code first.',
+  'hr.photoFailed': 'Couldn’t download the photo — please send it again.',
+  'hr.processing': '⏳ Checking the code…',
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -195,6 +217,28 @@ const ru: Record<MessageKey, string> = {
   'qr.resend': '✅ Статус оплаты: оплачено.\nВот ваш QR-код {track} ещё раз.',
   'qr.unavailable':
     '✅ Статус оплаты: оплачено. Не удалось отправить QR-код прямо сейчас — пожалуйста, отправьте /status через минуту.',
+
+  'hr.welcome':
+    '👋 Вы зарегистрированы как HR-сканер компании {company} на Job & Edu Fair 2026.\n' +
+    'Отправьте фото QR-кода участника, чтобы увидеть его профиль и отметить решение.',
+  'hr.profile':
+    '👤 {name}\nНаправление: {direction}\nТрек: {track}\n\n{checkIn}\n{decision}',
+  'hr.checkIn.first': '✅ Отмечен на входе сейчас ({time}).',
+  'hr.checkIn.already': 'ℹ️ Уже отмечен на входе в {time}.',
+  'hr.decision.none': 'Решение вашей компании: пока нет.',
+  'hr.decision.current': 'Решение вашей компании: {decision} ({time}).',
+  'hr.decision.interview': 'Приглашён на собеседование',
+  'hr.decision.internship': 'Рекомендован на стажировку',
+  'hr.decision.reserve': 'В резерве',
+  'hr.decisionSaved': '✅ Сохранено для {name}: {decision}.',
+  'hr.invalidCode':
+    '❌ Недействительный код. Сфотографируйте ближе и чётче или попросите участника заново открыть QR-код.',
+  'hr.otherEvent': '⚠️ Этот код не от Job & Edu Fair 2026.',
+  'hr.noLongerValid':
+    '⛔ Эта регистрация больше не действительна (оплата возвращена или не завершена). Направьте участника на стойку регистрации.',
+  'hr.notScanned': 'Сначала отсканируйте QR-код участника.',
+  'hr.photoFailed': 'Не удалось загрузить фото — отправьте его ещё раз.',
+  'hr.processing': '⏳ Проверяем код…',
 };
 
 const uz: Record<MessageKey, string> = {
@@ -293,6 +337,28 @@ const uz: Record<MessageKey, string> = {
     "✅ To'lov holati: to'langan.\nMana {track} QR-kodingiz yana bir bor.",
   'qr.unavailable':
     "✅ To'lov holati: to'langan. QR-kodni hozir yuborib bo'lmadi — iltimos, bir daqiqadan so'ng /status ni qayta yuboring.",
+
+  'hr.welcome':
+    "👋 Siz Job & Edu Fair 2026 da {company} kompaniyasining HR skaneri sifatida ro'yxatdan o'tdingiz.\n" +
+    "Ishtirokchining profilini ko'rish va qaror belgilash uchun uning QR-kodi rasmini yuboring.",
+  'hr.profile':
+    "👤 {name}\nYo'nalish: {direction}\nTrek: {track}\n\n{checkIn}\n{decision}",
+  'hr.checkIn.first': '✅ Hozir kirish qayd etildi ({time}).',
+  'hr.checkIn.already': 'ℹ️ Kirish allaqachon {time} da qayd etilgan.',
+  'hr.decision.none': "Kompaniyangiz qarori: hali yo'q.",
+  'hr.decision.current': 'Kompaniyangiz qarori: {decision} ({time}).',
+  'hr.decision.interview': 'Suhbatga chaqirildi',
+  'hr.decision.internship': 'Stajirovkaga tavsiya',
+  'hr.decision.reserve': 'Zaxirada',
+  'hr.decisionSaved': '✅ {name} uchun saqlandi: {decision}.',
+  'hr.invalidCode':
+    "❌ Yaroqsiz kod. Yaqinroqdan va aniqroq suratga oling yoki ishtirokchidan QR-kodni qayta ochishni so'rang.",
+  'hr.otherEvent': '⚠️ Bu kod Job & Edu Fair 2026 ga tegishli emas.',
+  'hr.noLongerValid':
+    "⛔ Bu ro'yxatdan o'tish endi haqiqiy emas (to'lov qaytarilgan yoki yakunlanmagan). Ishtirokchini ro'yxatga olish stoliga yuboring.",
+  'hr.notScanned': 'Avval ishtirokchining QR-kodini skanerlang.',
+  'hr.photoFailed': "Rasmni yuklab bo'lmadi — iltimos, qayta yuboring.",
+  'hr.processing': '⏳ Kod tekshirilmoqda…',
 };
 
 export const translations: Record<Lang, Record<MessageKey, string>> = {

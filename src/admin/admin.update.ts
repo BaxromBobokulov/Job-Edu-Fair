@@ -2,6 +2,9 @@ import { Logger } from '@nestjs/common';
 import { Command, Ctx, Update } from 'nestjs-telegraf';
 import { logUnexpected } from '../bot/scenes/registration.helpers';
 import type { BotContext } from '../bot/bot.context';
+import { HrAlreadyBoundError } from '../hr/hr.errors';
+import { HrScannerService } from '../hr/hr-scanner.service';
+import { isLang, t } from '../i18n/i18n';
 import { parsePhone } from '../participants/registration.rules';
 import {
   InvalidPaymentTransitionError,
@@ -17,7 +20,17 @@ const USAGE = {
   payment_lookup: '/payment_lookup <phone>',
   refund_request: '/refund_request <paymentId>',
   refund_approve: '/refund_approve <paymentId>',
+  hr_add: '/hr_add <telegramId> <uz|ru|en> <company name>',
 };
+
+/** "/hr_add 123 uz Acme Corp" → { 123, 'uz', 'Acme Corp' }, or null. */
+export function parseHrAdd(
+  arg: string,
+): { telegramId: number; lang: 'uz' | 'ru' | 'en'; company: string } | null {
+  const m = /^(\d{1,15})\s+(\S+)\s+(.+)$/.exec(arg);
+  if (!m || !isLang(m[2]) || m[3].trim() === '') return null;
+  return { telegramId: Number(m[1]), lang: m[2], company: m[3] };
+}
 
 /** Text after the command, e.g. "/refund_approve abc" → "abc". */
 function argOf(ctx: BotContext): string {
@@ -29,7 +42,7 @@ function argOf(ctx: BotContext): string {
 function describe(p: PaymentWithParticipant): string {
   return [
     `${p.id}`,
-    `  ${p.participant.fullName}, ${p.participant.phone}`,
+    `  ${p.participant.fullName ?? '(PII purged)'}, ${p.participant.phone ?? '—'}`,
     `  status: ${p.status}, amount: ${p.amount}`,
     ...(p.refundRequestedAt
       ? [
@@ -50,6 +63,7 @@ export class AdminUpdate {
   constructor(
     private readonly auth: AdminAuth,
     private readonly payments: PaymentsService,
+    private readonly hr: HrScannerService,
   ) {}
 
   @Command('payment_lookup')
@@ -113,6 +127,58 @@ export class AdminUpdate {
     });
   }
 
+  /**
+   * Binds a Telegram user to a company as its HR scanner. A bot command
+   * rather than a seed script so organizers can add HR on event day from
+   * their phone, with the adding admin recorded (HrUser.addedBy).
+   */
+  @Command('hr_add')
+  async onHrAdd(@Ctx() ctx: BotContext): Promise<void> {
+    const adminId = ctx.from?.id;
+    if (!this.allowed(ctx, 'hr_add') || !adminId) return;
+    const input = parseHrAdd(argOf(ctx));
+    if (!input) {
+      await ctx.reply(`Usage: ${USAGE.hr_add}`);
+      return;
+    }
+    await this.run(ctx, async () => {
+      const hr = await this.hr.registerHr({
+        adminTelegramId: adminId,
+        hrTelegramId: input.telegramId,
+        languageCode: input.lang,
+        companyName: input.company,
+      });
+      let notified = true;
+      try {
+        await ctx.telegram.sendMessage(
+          input.telegramId,
+          t('hr.welcome', hr.languageCode, { company: hr.companyName }),
+        );
+      } catch {
+        notified = false; // they haven't started the bot yet
+      }
+      return (
+        `HR ${hr.telegramId} is bound to "${hr.companyName}" (${hr.languageCode}).` +
+        (notified
+          ? ''
+          : '\nCouldn’t message them: they must open the bot and send /start first.')
+      );
+    });
+  }
+
+  @Command('hr_list')
+  async onHrList(@Ctx() ctx: BotContext): Promise<void> {
+    if (!this.allowed(ctx, 'hr_list')) return;
+    await this.run(ctx, async () => {
+      const all = await this.hr.listHr();
+      return all.length > 0
+        ? all
+            .map((h) => `${h.companyName}: ${h.telegramId} (${h.languageCode})`)
+            .join('\n')
+        : 'No HR users yet.';
+    });
+  }
+
   private allowed(ctx: BotContext, command: string): boolean {
     if (this.auth.isAdmin(ctx.from?.id)) return true;
     this.logger.warn(
@@ -132,6 +198,8 @@ export class AdminUpdate {
     } catch (err) {
       if (err instanceof PaymentNotFoundError) {
         reply = 'No payment with that id.';
+      } else if (err instanceof HrAlreadyBoundError) {
+        reply = `Not allowed: that user is already HR for "${err.companyName}".`;
       } else if (err instanceof InvalidPaymentTransitionError) {
         reply = `Not allowed: the payment is ${err.from}, it cannot become ${err.to}.`;
       } else {

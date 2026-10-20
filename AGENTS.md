@@ -95,7 +95,7 @@ Payment is a state machine: `pending → paid → refund_requested → refunded`
 
 ### src/qr/
 
-Generation and decoding are separate concerns. Decoding takes a Telegram photo message, downloads the largest resolution, decodes server-side, and resolves it to a `Participant` — this must handle "not a valid QR", "QR from a different event", and "already checked in" as distinct, clearly-worded errors to the HR user, not a generic failure.
+Generation and decoding are separate concerns. Decoding takes a Telegram photo message, downloads the largest resolution, decodes server-side, and resolves it to a `Participant` — besides success, this must handle "not a valid code" (no readable QR, or our prefix with an unknown token), "not from this event" (no `JEF26:` prefix) and "no longer valid" (a real token whose current payment isn't `paid`) as distinct, clearly-worded errors to the HR user, not a generic failure. "Already checked in" is not a decode outcome: it's an informational note on the profile after a successful decode (see "The QR / HR Scanner Flow").
 
 ### src/hr/
 
@@ -130,9 +130,10 @@ Pipeline: `createInvoice` → Click redirect/Prepare+Complete webhook → `markP
 ## The QR / HR Scanner Flow
 
 - QR payload encodes a stable participant identifier (e.g. a signed token), not raw DB IDs — so a photo of someone's QR can't be used to enumerate other participants.
-- Decoding a photo: download → decode → look up participant → check "already checked in" (and record a check-in timestamp the first time, column H) → show profile + action buttons.
+- Decoding a photo: download → decode → look up participant → record the check-in timestamp on the first successful scan only (column H; a later scan never overwrites it) → show profile + action buttons.
+- "Already checked in" is an informational note on the profile ("Already checked in at 14:05"), not a blocking error — a re-scanned participant still gets the profile and the decision buttons.
 - Each decision button (`Invited to interview` / `Recommended for internship` / `On hold`) is a `ScanEvent` row in Postgres (which company, which HR user, which decision, when) **and** triggers a queued Sheets write to columns I (HR shortlist status) and the company name.
-- Re-scanning an already-decided candidate shows the current decision and lets HR change it — it should never silently create a second conflicting row.
+- Re-scanning an already-decided candidate shows their company's current decision and lets HR record a (possibly different) one. `ScanEvent` is append-only (see `.claude/rules/database.md`): every decision press is a new row, never an update of an earlier one, and the current decision is the latest row for that participant and company.
 
 ---
 
@@ -142,7 +143,7 @@ The sheet must always resolve to exactly these columns, in this order — this i
 
 | Col | Field |
 | --- | --- |
-| A | ID / QR code number |
+| A | Participant ID (`Participant.id`) — also the sync's row key |
 | B | Full name |
 | C | Phone number |
 | D | Track/direction (Frontend, Backend, …) |
@@ -152,6 +153,8 @@ The sheet must always resolve to exactly these columns, in this order — this i
 | H | Check-in (arrived yes/no + timestamp) |
 | I | HR shortlist status |
 | J | 14/30-day job placement result |
+
+Column A is the participant's database id, **never** `Participant.qrToken`: the token is the admission credential and must not appear anywhere outside the QR image itself (not in the sheet, logs, or bot messages).
 
 Column J is **manually filled later** (there is no automated signal for "got the job" at 14/30 days) — the sync service must never overwrite a manually-entered J value.
 

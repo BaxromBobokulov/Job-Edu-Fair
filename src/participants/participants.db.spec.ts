@@ -24,6 +24,8 @@ import {
   InvalidRegistrationError,
   RegistrationClosedError,
 } from './participants.errors';
+import { InlineJobQueue } from '../queue/job-queue';
+import { SheetsSyncService } from '../sheets/sheets-sync.service';
 import { ParticipantsService, RegistrationInput } from './participants.service';
 
 const TEST_SCHEMA = 'qrbot_test';
@@ -51,6 +53,7 @@ describeDb('ParticipantsService (Postgres)', () => {
     new ParticipantsService(
       prisma,
       new ConfigService({ MAX_PARTICIPANTS: cap }),
+      new SheetsSyncService(new InlineJobQueue('sheets-sync')),
     );
 
   beforeAll(async () => {

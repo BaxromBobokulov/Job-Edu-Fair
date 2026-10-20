@@ -38,6 +38,7 @@ export class PaymentExpiryCron {
     }
 
     for (const payment of expired) {
+      if (payment.telegramId === null) continue; // PII purged: nobody to tell
       const { text, extra } = expiryNotice(payment.languageCode);
       try {
         await this.bot.telegram.sendMessage(

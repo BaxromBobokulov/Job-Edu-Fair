@@ -7,6 +7,7 @@ import {
 } from '../../test/telegram-fakes';
 import { BotModule } from '../bot/bot.module';
 import { ParticipantsService } from '../participants/participants.service';
+import { HrScannerService } from '../hr/hr-scanner.service';
 import { InvalidPaymentTransitionError } from '../payments/payments.errors';
 import { PaymentsService } from '../payments/payments.service';
 import { QrService } from '../qr/qr.service';
@@ -48,7 +49,9 @@ describe('admin refund commands', () => {
           .overrideProvider(ParticipantsService)
           .useValue({})
           .overrideProvider(QrService)
-          .useValue({}),
+          .useValue({})
+          .overrideProvider(HrScannerService)
+          .useValue({ findHr: () => Promise.resolve(null) }),
     );
     bot = testBot.bot;
     sent = testBot.sent;

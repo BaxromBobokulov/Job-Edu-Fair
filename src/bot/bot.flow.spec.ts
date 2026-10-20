@@ -8,6 +8,7 @@ import {
   SentMessage,
   textUpdate,
 } from '../../test/telegram-fakes';
+import { HrScannerService } from '../hr/hr-scanner.service';
 import { Lang, LANGUAGES, t } from '../i18n/i18n';
 import { RegistrationClosedError } from '../participants/participants.errors';
 import {
@@ -81,7 +82,9 @@ describe('registration bot flow', () => {
         .overrideProvider(ClickConfig)
         .useValue({})
         .overrideProvider(QrService)
-        .useValue(qr),
+        .useValue(qr)
+        .overrideProvider(HrScannerService)
+        .useValue({ findHr: () => Promise.resolve(null) }),
     );
     bot = testBot.bot;
     sent = testBot.sent;

@@ -4,4 +4,6 @@ export const ADMIN_COMMANDS = [
   'refunds',
   'refund_request',
   'refund_approve',
+  'hr_add',
+  'hr_list',
 ] as const;

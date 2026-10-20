@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "Participant" ADD COLUMN     "piiPurgedAt" TIMESTAMP(3),
+ALTER COLUMN "telegramId" DROP NOT NULL,
+ALTER COLUMN "phone" DROP NOT NULL,
+ALTER COLUMN "fullName" DROP NOT NULL;

@@ -22,12 +22,15 @@ enum LanguageCode {
 }
 
 model Participant {
-  id                String   @id @default(uuid())
+  id                String       @id @default(uuid())
   /// Telegram user id of the registrant — one registration per Telegram account.
-  telegramId        BigInt   @unique
+  /// PII: nulled by the retention purge, like phone, fullName and cvLink.
+  telegramId        BigInt?      @unique
   languageCode      LanguageCode
-  phone             String
-  fullName          String
+  /// Null only after the retention purge (piiPurgedAt set).
+  phone             String?
+  /// Null only after the retention purge (piiPurgedAt set).
+  fullName          String?
   birthYearOrCourse String
   /// One of DIRECTIONS in src/participants/registration.rules.ts.
   direction         String
@@ -36,8 +39,16 @@ model Participant {
   track             Track?
   cvLink            String?
   /// Non-guessable token encoded into the QR image — never the raw `id`.
-  qrToken           String   @unique
-  createdAt         DateTime @default(now())
+  qrToken           String       @unique
+  createdAt         DateTime     @default(now())
+  /// First successful HR scan (column H). Set once, never overwritten by a re-scan.
+  checkedInAt       DateTime?
+  /// The HR user whose scan set checkedInAt.
+  checkedInById     String?
+  checkedInBy       HrUser?      @relation("CheckIn", fields: [checkedInById], references: [id])
+  /// Set by the retention job (src/retention/) when it nulled this row's PII
+  /// at EVENT_DATE + 3 months. The row stays for aggregate stats.
+  piiPurgedAt       DateTime?
 
   /// Newest first is the current one; older rows are expired attempts.
   payments   Payment[]
@@ -64,7 +75,7 @@ model Payment {
   status            PaymentStatus @default(pending)
   /// In so'm. Stored, not assumed: Click callbacks are checked against this and PAYMENT_AMOUNT_UZS.
   amount            Int
-  /// Click's click_trans_id, recorded on Prepare.
+  /// Click's click_trans_id, recorded on Prepare. Nulled by the retention purge.
   clickTransId      BigInt?       @unique
   /// Our merchant_prepare_id / merchant_confirm_id — Click requires an integer, hence a sequence.
   clickPrepareId    Int           @unique @default(autoincrement())
@@ -85,28 +96,52 @@ model Payment {
   @@index([status, createdAt])
 }
 
-// Stub — name etc. arrive with the HR scanner part.
 model Company {
   id         String      @id @default(uuid())
+  /// As written to the Sheets mirror with each decision.
+  name       String      @unique
+  createdAt  DateTime    @default(now())
   hrUsers    HrUser[]
   scanEvents ScanEvent[]
 }
 
-// Stub — an HR user is bound to exactly one company.
+/// A company's HR scanner, identified by Telegram id and bound to exactly one
+/// company — every ScanEvent it records carries this companyId.
 model HrUser {
-  id         String      @id @default(uuid())
-  companyId  String
-  company    Company     @relation(fields: [companyId], references: [id])
-  scanEvents ScanEvent[]
+  id           String        @id @default(uuid())
+  telegramId   BigInt        @unique
+  companyId    String
+  company      Company       @relation(fields: [companyId], references: [id])
+  /// Language of the scanner screens (HR users skip the participant language picker).
+  languageCode LanguageCode
+  /// Telegram id of the admin who registered this HR user.
+  addedBy      BigInt
+  createdAt    DateTime      @default(now())
+  scanEvents   ScanEvent[]
+  checkIns     Participant[] @relation("CheckIn")
 }
 
-// Stub — append-only scan history; decision/timestamp arrive with the HR scanner part.
+/// HR shortlist decision (Sheets column I).
+enum ScanDecision {
+  interview
+  internship
+  reserve
+}
+
+/// Append-only decision history: every button press is a new row, never an
+/// update. A company's current decision on a participant is its latest row.
 model ScanEvent {
-  id            String      @id @default(uuid())
+  id            String       @id @default(uuid())
+  /// Tie-breaker for "latest" when two rows share a millisecond.
+  seq           Int          @unique @default(autoincrement())
   participantId String
-  participant   Participant @relation(fields: [participantId], references: [id])
+  participant   Participant  @relation(fields: [participantId], references: [id])
   companyId     String
-  company       Company     @relation(fields: [companyId], references: [id])
+  company       Company      @relation(fields: [companyId], references: [id])
   hrUserId      String
-  hrUser        HrUser      @relation(fields: [hrUserId], references: [id])
+  hrUser        HrUser       @relation(fields: [hrUserId], references: [id])
+  decision      ScanDecision
+  createdAt     DateTime     @default(now())
+
+  @@index([participantId, companyId, createdAt])
 }

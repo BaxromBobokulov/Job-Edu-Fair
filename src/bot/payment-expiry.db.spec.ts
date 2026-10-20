@@ -61,8 +61,9 @@ describeDb('payment expiry (Postgres + bot)', () => {
     // MAX_PARTICIPANTS is read per call, so each test can set its own cap.
     const config = moduleRef.get(ConfigService);
     // The prototype method, untouched by the instance spy below.
-    const realGet = (key: string): unknown =>
-      ConfigService.prototype.get.call(config, key);
+    // Explicit signature: `.call` on the overloaded `get` resolves to its 4-argument form.
+    const realGet =
+      ConfigService.prototype.get.bind<(key: string) => unknown>(config);
     jest
       .spyOn(config, 'get')
       .mockImplementation((key: string) =>

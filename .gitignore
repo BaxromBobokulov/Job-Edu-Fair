@@ -2,3 +2,6 @@ node_modules
 dist
 coverage
 .env
+
+# Google service-account key (GOOGLE_SERVICE_ACCOUNT_JSON path)
+/secrets/

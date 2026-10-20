@@ -121,7 +121,7 @@ export class TrackSplitScene {
       participantId = participant.id;
       key = 'registration.success';
       params = {
-        name: participant.fullName,
+        name: participant.fullName ?? draft.fullName,
         track: participant.track
           ? t(`track.${participant.track}`, languageCode)
           : '—',

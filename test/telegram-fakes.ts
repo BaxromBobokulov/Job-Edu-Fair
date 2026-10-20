@@ -70,6 +70,22 @@ export function contactUpdate(
   };
 }
 
+/** A photo message, as Telegram sends it: several sizes of the same image. */
+export function photoUpdate(fromId: number): Update {
+  const message = baseMessage(fromId);
+  return {
+    update_id: updateId,
+    message: {
+      ...message,
+      photo: [
+        { file_id: 'small', file_unique_id: 's', width: 90, height: 90 },
+        { file_id: 'large', file_unique_id: 'l', width: 1280, height: 1280 },
+        { file_id: 'medium', file_unique_id: 'm', width: 320, height: 320 },
+      ],
+    },
+  };
+}
+
 /** A tap on an inline button with the given callback data. */
 export function callbackUpdate(fromId: number, data: string): Update {
   const message = baseMessage(fromId);

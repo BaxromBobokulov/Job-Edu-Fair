@@ -36,14 +36,15 @@ const SECRET = 'test-secret';
 const SERVICE_ID = '111';
 
 /**
- * The image a participant must receive: their token, rendered with the
- * track's colour. Written out here, not taken from qr.service, so a wrong
- * payload, colour or quiet zone in the service fails the comparison.
+ * The image a participant must receive: `text` (normally `JEF26:<qrToken>`),
+ * rendered with the track's colour. Written out here, not taken from
+ * qr.service, so a wrong payload, prefix, colour or quiet zone in the service
+ * fails the comparison.
  */
-function expectedPng(qrToken: string, dark: string): Promise<Buffer> {
+function expectedPng(text: string, dark: string): Promise<Buffer> {
   // Same pixels for any PNG filter; the filter only changes the bytes.
   const rendererOpts = { deflateLevel: 9, filterType: 2 };
-  return QRCode.toBuffer(qrToken, {
+  return QRCode.toBuffer(text, {
     type: 'png',
     errorCorrectionLevel: 'M',
     margin: 4,
@@ -52,6 +53,8 @@ function expectedPng(qrToken: string, dark: string): Promise<Buffer> {
     rendererOpts,
   });
 }
+/** This event's QR text for a token. */
+const jef26 = (qrToken: string) => `JEF26:${qrToken}`;
 const GREEN = '#006B3CFF';
 const BLUE = '#0047ABFF';
 
@@ -206,15 +209,18 @@ describeDb('QR issuance (Postgres + bot)', () => {
       const [qr] = photosTo(telegramId);
       expect(qr.text).toBe(t(`qr.issued.${track}`, lang));
       expect(
-        qr.photo!.equals(await expectedPng(participant.qrToken, colour)),
+        qr.photo!.equals(await expectedPng(jef26(participant.qrToken), colour)),
       ).toBe(true);
-      // Not the row id, and not the other track's colour.
+      // Not the bare token, not the row id, not the other track's colour.
       const other = colour === GREEN ? BLUE : GREEN;
-      expect(qr.photo!.equals(await expectedPng(participant.id, colour))).toBe(
-        false,
-      );
       expect(
-        qr.photo!.equals(await expectedPng(participant.qrToken, other)),
+        qr.photo!.equals(await expectedPng(participant.qrToken, colour)),
+      ).toBe(false);
+      expect(
+        qr.photo!.equals(await expectedPng(jef26(participant.id), colour)),
+      ).toBe(false);
+      expect(
+        qr.photo!.equals(await expectedPng(jef26(participant.qrToken), other)),
       ).toBe(false);
       expect(await paymentStatus(paymentId)).toBe(PaymentStatus.paid);
     },
@@ -251,7 +257,9 @@ describeDb('QR issuance (Postgres + bot)', () => {
       t('qr.resend', 'ru', { track: t('track.JOB', 'ru') }),
     );
     expect(
-      resent.photo!.equals(await expectedPng(participant.qrToken, GREEN)),
+      resent.photo!.equals(
+        await expectedPng(jef26(participant.qrToken), GREEN),
+      ),
     ).toBe(true);
   });
 
@@ -290,7 +298,9 @@ describeDb('QR issuance (Postgres + bot)', () => {
     await bot.handleUpdate(textUpdate(telegramId, '/status'));
     const [recovered] = photosTo(telegramId);
     expect(
-      recovered.photo!.equals(await expectedPng(participant.qrToken, BLUE)),
+      recovered.photo!.equals(
+        await expectedPng(jef26(participant.qrToken), BLUE),
+      ),
     ).toBe(true);
   });
 

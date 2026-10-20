@@ -17,7 +17,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # Not used yet — the Sheets sync queue (BullMQ) lands in Part 2.
+  # BullMQ: sheets-sync + qr-decode queues.
   redis:
     image: redis:7-alpine
     ports:

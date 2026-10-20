@@ -9,6 +9,8 @@ import { BotModule } from './bot/bot.module';
 import { createTelegrafOptions } from './config/telegraf.config';
 import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { RetentionModule } from './retention/retention.module';
+import { SheetsModule } from './sheets/sheets.module';
 
 @Module({
   imports: [
@@ -22,6 +24,8 @@ import { PrismaModule } from './prisma/prisma.module';
     BotModule,
     PaymentsModule,
     AdminModule,
+    SheetsModule,
+    RetentionModule,
   ],
   controllers: [AppController],
   providers: [AppService],
