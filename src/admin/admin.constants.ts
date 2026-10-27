@@ -6,4 +6,5 @@ export const ADMIN_COMMANDS = [
   'refund_approve',
   'hr_add',
   'hr_list',
+  'dev_mark_paid',
 ] as const;

@@ -13,13 +13,16 @@ import { QrService } from '../qr/qr.service';
 import { SheetsSyncService } from '../sheets/sheets-sync.service';
 import { ClickConfig } from './click.config';
 import { ClickError, VerifiedClickRequest } from './click.protocol';
+import { devPaymentBypassEnabled } from './dev-payment-bypass';
 import { assertTransition } from './payment-state';
 import { PAYMENT_AMOUNT_UZS } from './payments.constants';
 import {
   ClickNotConfiguredError,
+  DevPaymentBypassDisabledError,
   InvalidPaymentTransitionError,
   PaymentNotAllowedError,
   PaymentNotFoundError,
+  PaymentOverdueError,
 } from './payments.errors';
 
 /** What the bot needs to show a participant their payment. */
@@ -246,25 +249,75 @@ export class PaymentsService {
         return { error: ClickError.TransactionCancelled };
       }
 
-      assertTransition(payment.status, PaymentStatus.paid);
-      await tx.payment.update({
-        where: { id: payment.id },
-        data: { status: PaymentStatus.paid, paidAt: new Date() },
-      });
-      this.logger.log(`Payment ${payment.id} paid`);
+      await this.markPaid(tx, payment);
       paidParticipantId = payment.participantId;
       return { error: ClickError.Success, ...confirm };
     });
 
-    // QR issuance: the side effect of this call's `pending → paid`, run once
-    // the transition is committed (a QR failure can't roll back `paid`) and
-    // not awaited (Click's answer doesn't wait on Telegram). A replay never
-    // gets here, so the QR is sent once; /status resends it on demand.
-    if (paidParticipantId) {
-      this.sheets.paymentStatusChanged(paidParticipantId);
-      this.issueQrAfterPaid(paidParticipantId);
-    }
+    // A replay never gets here, so the QR is sent once; /status resends it.
+    if (paidParticipantId) this.afterPaid(paidParticipantId);
     return result;
+  }
+
+  /**
+   * DEV ONLY (/dev_mark_paid): the participant's current invoice
+   * `pending → paid` without Click, through the same transition and side
+   * effects as handleComplete. Refuses unless devPaymentBypassEnabled.
+   *
+   * @throws DevPaymentBypassDisabledError | PaymentNotFoundError |
+   *   PaymentOverdueError | InvalidPaymentTransitionError
+   */
+  async devMarkPaid(
+    participantId: string,
+    adminTelegramId: number,
+  ): Promise<Payment> {
+    if (!devPaymentBypassEnabled(this.config)) {
+      throw new DevPaymentBypassDisabledError();
+    }
+    if (!UUID_RE.test(participantId)) throw new PaymentNotFoundError();
+
+    const payment = await this.prisma.$transaction(async (tx) => {
+      const latest = await tx.payment.findFirst({
+        where: { participantId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      const payment = latest && (await this.lock(tx, latest.id));
+      if (!payment) throw new PaymentNotFoundError();
+      // Same rule as Click: past the hold, its place may be someone else's.
+      if (isOverdue(payment, new Date())) throw new PaymentOverdueError();
+      await this.markPaid(tx, payment);
+      return payment;
+    });
+
+    this.logger.warn(
+      `DEV BYPASS: payment ${payment.id} marked paid manually by admin ${adminTelegramId} — not a Click transaction`,
+    );
+    this.afterPaid(payment.participantId);
+    return payment;
+  }
+
+  /** `pending → paid` inside the caller's transaction, on a row it has locked. */
+  private async markPaid(
+    tx: Prisma.TransactionClient,
+    payment: Payment,
+  ): Promise<void> {
+    assertTransition(payment.status, PaymentStatus.paid);
+    await tx.payment.update({
+      where: { id: payment.id },
+      data: { status: PaymentStatus.paid, paidAt: new Date() },
+    });
+    this.logger.log(`Payment ${payment.id} paid`);
+  }
+
+  /**
+   * Side effects of a `pending → paid`: Sheets column G and QR issuance, run
+   * once the transition is committed (a QR failure can't roll back `paid`)
+   * and not awaited (Click's answer doesn't wait on Telegram).
+   */
+  private afterPaid(participantId: string): void {
+    this.sheets.paymentStatusChanged(participantId);
+    this.issueQrAfterPaid(participantId);
   }
 
   /**

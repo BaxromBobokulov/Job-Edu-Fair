@@ -14,6 +14,7 @@ import { describeDb, setUpTestDatabase } from '../../test/test-db';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { QrService } from '../qr/qr.service';
+import { SheetsSyncService } from '../sheets/sheets-sync.service';
 import {
   ClickError,
   ClickRawRequest,
@@ -21,8 +22,10 @@ import {
   ClickResponse,
 } from './click.protocol';
 import {
+  DevPaymentBypassDisabledError,
   InvalidPaymentTransitionError,
   PaymentNotAllowedError,
+  PaymentOverdueError,
 } from './payments.errors';
 import { PaymentsModule } from './payments.module';
 import { PaymentsService } from './payments.service';
@@ -436,6 +439,89 @@ describeDb('Click payments (Postgres + HTTP)', () => {
       status: 'pending',
       refundApprovedBy: null,
       refundRequestedBy: null,
+    });
+  });
+
+  describe('devMarkPaid (dev-only bypass)', () => {
+    const saved = {
+      NODE_ENV: process.env.NODE_ENV,
+      ALLOW: process.env.ALLOW_DEV_PAYMENT_BYPASS,
+    };
+    afterEach(() => {
+      process.env.NODE_ENV = saved.NODE_ENV;
+      if (saved.ALLOW === undefined) {
+        delete process.env.ALLOW_DEV_PAYMENT_BYPASS;
+      } else process.env.ALLOW_DEV_PAYMENT_BYPASS = saved.ALLOW;
+    });
+
+    it('runs the same pending → paid as Click, QR + Sheets included, logged loudly', async () => {
+      process.env.NODE_ENV = 'development';
+      process.env.ALLOW_DEV_PAYMENT_BYPASS = 'true';
+      const sheetsSpy = jest.spyOn(
+        app.get(SheetsSyncService),
+        'paymentStatusChanged',
+      );
+      const participant = await createParticipant();
+      const { paymentId } = await payments.createInvoice(participant.id);
+      sheetsSpy.mockClear();
+
+      const paid = await payments.devMarkPaid(participant.id, 4242);
+      expect(paid.id).toBe(paymentId);
+      const row = await paymentRow(paymentId);
+      expect(row.status).toBe(PaymentStatus.paid);
+      expect(row.paidAt).toBeInstanceOf(Date);
+      // Distinguishable from a real Click payment: no Click transaction recorded.
+      expect(row).toMatchObject({ clickTransId: null, preparedAt: null });
+      expect(qr.sendQr.mock.calls).toEqual([[participant.id, 'issued']]);
+      expect(sheetsSpy).toHaveBeenCalledWith(participant.id);
+      expect(logged).toContain(`Payment ${paymentId} paid`);
+      expect(logged).toContain(
+        `DEV BYPASS: payment ${paymentId} marked paid manually by admin 4242 — not a Click transaction`,
+      );
+
+      // A second use is a rejected paid → paid, not a second QR.
+      await expect(
+        payments.devMarkPaid(participant.id, 4242),
+      ).rejects.toBeInstanceOf(InvalidPaymentTransitionError);
+      expect(qr.sendQr).toHaveBeenCalledTimes(1);
+      sheetsSpy.mockRestore();
+    });
+
+    it.each([
+      ['production', 'true'],
+      ['development', undefined],
+    ])(
+      'is refused (NODE_ENV=%s, flag=%p) without touching the payment',
+      async (nodeEnv, allow) => {
+        process.env.NODE_ENV = nodeEnv;
+        if (allow === undefined) delete process.env.ALLOW_DEV_PAYMENT_BYPASS;
+        else process.env.ALLOW_DEV_PAYMENT_BYPASS = allow;
+        const participant = await createParticipant();
+        const { paymentId } = await payments.createInvoice(participant.id);
+
+        await expect(
+          payments.devMarkPaid(participant.id, 4242),
+        ).rejects.toBeInstanceOf(DevPaymentBypassDisabledError);
+        expect((await paymentRow(paymentId)).status).toBe('pending');
+        expect(qr.sendQr).not.toHaveBeenCalled();
+      },
+    );
+
+    it('refuses an invoice past its 2-hour hold, like Click', async () => {
+      process.env.NODE_ENV = 'development';
+      process.env.ALLOW_DEV_PAYMENT_BYPASS = 'true';
+      const participant = await createParticipant();
+      const { paymentId } = await payments.createInvoice(participant.id);
+      await prisma.payment.update({
+        where: { id: paymentId },
+        data: { createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000) },
+      });
+
+      await expect(
+        payments.devMarkPaid(participant.id, 4242),
+      ).rejects.toBeInstanceOf(PaymentOverdueError);
+      expect((await paymentRow(paymentId)).status).toBe('pending');
+      expect(qr.sendQr).not.toHaveBeenCalled();
     });
   });
 

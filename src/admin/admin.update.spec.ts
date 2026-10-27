@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Telegraf } from 'telegraf';
 import {
@@ -28,6 +29,7 @@ describe('admin refund commands', () => {
     findByPhone: jest.fn(),
     createInvoice: jest.fn(),
     getStatusByTelegramId: jest.fn(),
+    devMarkPaid: jest.fn(),
   };
 
   beforeAll(async () => {
@@ -122,4 +124,129 @@ describe('admin refund commands', () => {
     expect(payments.findByPhone).toHaveBeenCalledWith('+998901234567');
     expect(sent.at(-1)?.text).toBe('No payment for that phone number.');
   });
+
+  it('labels the participant id in a lookup result (for /dev_mark_paid)', async () => {
+    const participantId = '5d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+    payments.findByPhone.mockResolvedValue([
+      {
+        id: PAYMENT_ID,
+        participantId,
+        status: 'paid',
+        amount: 50_000,
+        refundRequestedAt: null,
+        participant: { fullName: 'Aziz Karimov', phone: '+998901234567' },
+      },
+    ]);
+    await send(ADMIN, '/payment_lookup +998901234567');
+    expect(sent.at(-1)?.text).toBe(
+      [
+        PAYMENT_ID,
+        '  Aziz Karimov, +998901234567',
+        '  status: paid, amount: 50000',
+        `  participant id: ${participantId}`,
+      ].join('\n'),
+    );
+  });
+});
+
+describe('/dev_mark_paid (dev-only payment bypass)', () => {
+  const PARTICIPANT_ID = '5d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+  let bot: Telegraf;
+  let sent: SentMessage[];
+  let warnings: string[];
+  const payments = { devMarkPaid: jest.fn() };
+  const savedEnv = {
+    NODE_ENV: process.env.NODE_ENV,
+    ALLOW_DEV_PAYMENT_BYPASS: process.env.ALLOW_DEV_PAYMENT_BYPASS,
+  };
+
+  // Both gate variables come from process.env (not `load`), so each test can set them.
+  function setEnv(nodeEnv: string, allow: string | undefined) {
+    process.env.NODE_ENV = nodeEnv;
+    if (allow === undefined) delete process.env.ALLOW_DEV_PAYMENT_BYPASS;
+    else process.env.ALLOW_DEV_PAYMENT_BYPASS = allow;
+  }
+
+  beforeAll(async () => {
+    const testBot = await createTestBot(
+      [
+        ConfigModule.forRoot({
+          isGlobal: true,
+          ignoreEnvFile: true,
+          load: [() => ({ ADMIN_TELEGRAM_IDS: String(ADMIN) })],
+        }),
+        BotModule,
+        AdminModule,
+      ],
+      (b) =>
+        b
+          .overrideProvider(PaymentsService)
+          .useValue(payments)
+          .overrideProvider(ParticipantsService)
+          .useValue({})
+          .overrideProvider(QrService)
+          .useValue({})
+          .overrideProvider(HrScannerService)
+          .useValue({ findHr: () => Promise.resolve(null) }),
+    );
+    bot = testBot.bot;
+    sent = testBot.sent;
+  });
+
+  beforeEach(() => {
+    sent.length = 0;
+    warnings = [];
+    payments.devMarkPaid.mockReset().mockResolvedValue({ id: PAYMENT_ID });
+    jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation((message: unknown) => {
+        warnings.push(String(message));
+      });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    setEnv(savedEnv.NODE_ENV ?? 'test', savedEnv.ALLOW_DEV_PAYMENT_BYPASS);
+  });
+
+  const send = (from: number, text: string) =>
+    bot.handleUpdate(textUpdate(from, text));
+
+  it('marks paid for an admin when enabled outside production', async () => {
+    setEnv('development', 'true');
+    await send(ADMIN, `/dev_mark_paid ${PARTICIPANT_ID}`);
+    expect(payments.devMarkPaid).toHaveBeenCalledWith(PARTICIPANT_ID, ADMIN);
+    expect(sent.at(-1)?.text).toBe(
+      `DEV BYPASS: payment ${PAYMENT_ID} marked paid (no Click transaction). QR and Sheets sync triggered.`,
+    );
+  });
+
+  it('refuses a non-admin even when enabled — no reply, logged', async () => {
+    setEnv('development', 'true');
+    await send(STRANGER, `/dev_mark_paid ${PARTICIPANT_ID}`);
+    expect(payments.devMarkPaid).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    expect(warnings).toContain(`Non-admin ${STRANGER} tried /dev_mark_paid`);
+  });
+
+  it('refuses an admin when NODE_ENV is production, even with the flag set', async () => {
+    setEnv('production', 'true');
+    await send(ADMIN, `/dev_mark_paid ${PARTICIPANT_ID}`);
+    expect(payments.devMarkPaid).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    expect(warnings.some((w) => w.startsWith('DEV BYPASS refused'))).toBe(true);
+  });
+
+  it.each([undefined, 'false', '1'])(
+    'refuses an admin outside production when ALLOW_DEV_PAYMENT_BYPASS is %p',
+    async (allow) => {
+      setEnv('development', allow);
+      await send(ADMIN, `/dev_mark_paid ${PARTICIPANT_ID}`);
+      expect(payments.devMarkPaid).not.toHaveBeenCalled();
+      expect(sent).toEqual([]);
+      expect(warnings.some((w) => w.startsWith('DEV BYPASS refused'))).toBe(
+        true,
+      );
+    },
+  );
 });

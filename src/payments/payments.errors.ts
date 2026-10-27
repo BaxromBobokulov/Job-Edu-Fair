@@ -26,6 +26,22 @@ export class PaymentNotAllowedError extends Error {
   }
 }
 
+/** A pending invoice past its 2-hour hold: its place may be gone, it can't be paid. */
+export class PaymentOverdueError extends Error {
+  constructor() {
+    super('Payment is past its 2-hour hold');
+    this.name = 'PaymentOverdueError';
+  }
+}
+
+/** The dev payment bypass was called while disabled (see dev-payment-bypass.ts). */
+export class DevPaymentBypassDisabledError extends Error {
+  constructor() {
+    super('Dev payment bypass is disabled');
+    this.name = 'DevPaymentBypassDisabledError';
+  }
+}
+
 /** Lists the missing/invalid env names — never their values. */
 export class ClickNotConfiguredError extends Error {
   constructor(invalid: string[]) {

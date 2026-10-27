@@ -33,6 +33,21 @@ function errorName(err: unknown): string {
   return err instanceof Error ? err.name : typeof err;
 }
 
+/**
+ * Connection-level errors (Redis down, client missing) carry no job data, so
+ * their message is safe to log — and without it "Error" is undiagnosable.
+ */
+function connectionError(err: unknown): string {
+  if (!(err instanceof Error)) return typeof err;
+  // A refused dual-stack connect (::1 + 127.0.0.1) is an AggregateError with
+  // an empty message; the detail is in the inner errors.
+  const detail =
+    err instanceof AggregateError
+      ? err.errors.map((e: unknown) => connectionError(e)).join('; ')
+      : err.message;
+  return `${err.name}: ${detail}`;
+}
+
 /** Redis-backed (BullMQ): persistent, retried with backoff, failed jobs kept. */
 export class BullJobQueue<T extends object> implements JobQueue<T> {
   private readonly logger: Logger;
@@ -56,13 +71,15 @@ export class BullJobQueue<T extends object> implements JobQueue<T> {
       },
     });
     this.queue.on('error', (err) =>
-      this.logger.error(`Redis error: ${errorName(err)}`),
+      this.logger.error(`Redis error: ${connectionError(err)}`),
     );
     if (options.globalConcurrency !== undefined) {
       this.queue
         .setGlobalConcurrency(options.globalConcurrency)
         .catch((err: unknown) =>
-          this.logger.error(`setGlobalConcurrency failed: ${errorName(err)}`),
+          this.logger.error(
+            `setGlobalConcurrency failed: ${connectionError(err)}`,
+          ),
         );
     }
   }
@@ -84,7 +101,7 @@ export class BullJobQueue<T extends object> implements JobQueue<T> {
       ...(this.options.limiter && { limiter: this.options.limiter }),
     });
     this.worker.on('error', (err) =>
-      this.logger.error(`Worker error: ${errorName(err)}`),
+      this.logger.error(`Worker error: ${connectionError(err)}`),
     );
     this.worker.on('failed', (job, err) => {
       if (!job) return;

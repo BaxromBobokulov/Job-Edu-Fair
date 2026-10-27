@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Command, Ctx, Update } from 'nestjs-telegraf';
 import { logUnexpected } from '../bot/scenes/registration.helpers';
 import type { BotContext } from '../bot/bot.context';
@@ -6,9 +7,11 @@ import { HrAlreadyBoundError } from '../hr/hr.errors';
 import { HrScannerService } from '../hr/hr-scanner.service';
 import { isLang, t } from '../i18n/i18n';
 import { parsePhone } from '../participants/registration.rules';
+import { devPaymentBypassEnabled } from '../payments/dev-payment-bypass';
 import {
   InvalidPaymentTransitionError,
   PaymentNotFoundError,
+  PaymentOverdueError,
 } from '../payments/payments.errors';
 import {
   PaymentsService,
@@ -21,6 +24,7 @@ const USAGE = {
   refund_request: '/refund_request <paymentId>',
   refund_approve: '/refund_approve <paymentId>',
   hr_add: '/hr_add <telegramId> <uz|ru|en> <company name>',
+  dev_mark_paid: '/dev_mark_paid <participantId>',
 };
 
 /** "/hr_add 123 uz Acme Corp" → { 123, 'uz', 'Acme Corp' }, or null. */
@@ -64,6 +68,7 @@ export class AdminUpdate {
     private readonly auth: AdminAuth,
     private readonly payments: PaymentsService,
     private readonly hr: HrScannerService,
+    private readonly config: ConfigService,
   ) {}
 
   @Command('payment_lookup')
@@ -76,8 +81,11 @@ export class AdminUpdate {
     }
     await this.run(ctx, async () => {
       const found = await this.payments.findByPhone(phone);
+      // The participant id is what /dev_mark_paid takes.
       return found.length > 0
-        ? found.map(describe).join('\n\n')
+        ? found
+            .map((p) => `${describe(p)}\n  participant id: ${p.participantId}`)
+            .join('\n\n')
         : 'No payment for that phone number.';
     });
   }
@@ -166,6 +174,39 @@ export class AdminUpdate {
     });
   }
 
+  /**
+   * DEV ONLY: marks a participant's pending invoice paid without Click, to
+   * test QR issuance and Sheets locally. Admin-only and off unless
+   * devPaymentBypassEnabled; refusals log but never reply, like non-admins.
+   */
+  @Command('dev_mark_paid')
+  async onDevMarkPaid(@Ctx() ctx: BotContext): Promise<void> {
+    const adminId = ctx.from?.id;
+    if (!this.allowed(ctx, 'dev_mark_paid') || !adminId) return;
+    if (!devPaymentBypassEnabled(this.config)) {
+      this.logger.warn(
+        `DEV BYPASS refused: /dev_mark_paid by admin ${adminId} — disabled (needs ALLOW_DEV_PAYMENT_BYPASS=true and NODE_ENV not production)`,
+      );
+      return;
+    }
+    const participantId = argOf(ctx);
+    if (!participantId) {
+      await ctx.reply(`Usage: ${USAGE.dev_mark_paid}`);
+      return;
+    }
+    await this.run(ctx, async () => {
+      try {
+        const p = await this.payments.devMarkPaid(participantId, adminId);
+        return `DEV BYPASS: payment ${p.id} marked paid (no Click transaction). QR and Sheets sync triggered.`;
+      } catch (err) {
+        if (err instanceof PaymentNotFoundError) {
+          return 'No payment for that participant id.';
+        }
+        throw err;
+      }
+    });
+  }
+
   @Command('hr_list')
   async onHrList(@Ctx() ctx: BotContext): Promise<void> {
     if (!this.allowed(ctx, 'hr_list')) return;
@@ -202,6 +243,9 @@ export class AdminUpdate {
         reply = `Not allowed: that user is already HR for "${err.companyName}".`;
       } else if (err instanceof InvalidPaymentTransitionError) {
         reply = `Not allowed: the payment is ${err.from}, it cannot become ${err.to}.`;
+      } else if (err instanceof PaymentOverdueError) {
+        reply =
+          'Not allowed: that invoice is past its 2-hour hold. The participant needs a new one (/status) first.';
       } else {
         logUnexpected('admin command', err);
         reply = 'Something went wrong; check the server logs.';
